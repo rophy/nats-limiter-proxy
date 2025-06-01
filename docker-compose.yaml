@@ -12,5 +12,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      UPSTREAM_HOST: nats
+      UPSTREAM_PORT: 4222
     ports:
       - "4223:4223"
