@@ -7,3 +7,10 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
+  proxy:
+    image: nats-limiter-proxy
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4223:4223"
