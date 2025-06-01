@@ -1,0 +1,9 @@
+services:
+  nats:
+    image: nats:2.11.4-alpine3.21
+    command: ["-c", "/nats-server.conf"]
+    volumes:
+      - ./local/nats-server.conf:/nats-server.conf
+    ports:
+      - "4222:4222"
+      - "8222:8222"
