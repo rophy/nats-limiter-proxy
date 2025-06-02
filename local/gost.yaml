@@ -1,0 +1,18 @@
+services:
+  - name: service-0
+    addr: ":4222"
+    limiter: limiter-0
+    handler:
+      type: auto
+    listener:
+      type: tcp
+    metadata:
+      limiter.refreshInterval: 30s
+      limiter.scope: service
+limiters:
+  - name: limiter-0
+    limits:
+    - '$ 100MB 100MB'
+    - '$$ 10MB'
+    - '192.168.1.1  512KB 1MB'
+    - '192.168.0.0/16  1MB  5MB'

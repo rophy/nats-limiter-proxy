@@ -7,6 +7,7 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
+    
   proxy:
     image: nats-limiter-proxy
     build:

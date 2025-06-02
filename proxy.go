@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"strings"
+
+	"nats-limiter-proxy/server"
+
+	"github.com/juju/ratelimit"
 )
 
 const (
@@ -47,80 +47,22 @@ func handleConnection(clientConn net.Conn) {
 	}
 	defer upstreamConn.Close()
 
-	clientToUpstream := make(chan []byte)
-	upstreamToClient := make(chan []byte)
+	const bandwidth = 10024 * 1024 // bytes per second
 
-	var username string
+	clientToUpstreamBucket := ratelimit.NewBucketWithRate(float64(bandwidth), int64(bandwidth))
+	upstreamToClientBucket := ratelimit.NewBucketWithRate(float64(bandwidth), int64(bandwidth))
 
+	limitedClientReader := ratelimit.Reader(clientConn, clientToUpstreamBucket)
+	limitedUpstreamReader := ratelimit.Reader(upstreamConn, upstreamToClientBucket)
+	// Client -> Upstream
 	go func() {
-		reader := bufio.NewReader(clientConn)
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err != io.EOF {
-					fmt.Println("Read error from client:", err)
-				}
-				break
-			}
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" {
-				if strings.HasPrefix(trimmed, "CONNECT ") {
-					var obj map[string]interface{}
-					if err := json.Unmarshal([]byte(trimmed[8:]), &obj); err == nil {
-						if user, ok := obj["user"].(string); ok {
-							username = user
-							fmt.Printf("Authenticated user: %s\n", username)
-						}
-					} else {
-						fmt.Println("Failed to parse CONNECT line:", err)
-					}
-				}
-				if strings.HasPrefix(trimmed, "PUB ") && username != "" {
-					fmt.Printf("User \"%s\" sent message: %s\n", username, trimmed)
-				} else {
-					fmt.Println("C->S:", trimmed)
-				}
-			}
-			clientToUpstream <- []byte(line)
-		}
-		close(clientToUpstream)
+		var parser server.NATSProxyParser
+		parser.ParseAndForward(limitedClientReader, upstreamConn)
 	}()
 
-	go func() {
-		reader := bufio.NewReader(upstreamConn)
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err != io.EOF {
-					fmt.Println("Read error from upstream:", err)
-				}
-				break
-			}
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" {
-				fmt.Println("S->C:", trimmed)
-			}
-			upstreamToClient <- []byte(line)
-		}
-		close(upstreamToClient)
-	}()
-
-	for clientToUpstream != nil || upstreamToClient != nil {
-		select {
-		case data, ok := <-clientToUpstream:
-			if !ok {
-				clientToUpstream = nil
-				continue
-			}
-			upstreamConn.Write(data)
-		case data, ok := <-upstreamToClient:
-			if !ok {
-				upstreamToClient = nil
-				continue
-			}
-			clientConn.Write(data)
-		}
-	}
+	// Upstream -> Client
+	var parser server.NATSProxyParser
+	parser.ParseAndForward(limitedUpstreamReader, clientConn)
 }
 
 func main() {
