@@ -18,3 +18,5 @@ services:
       UPSTREAM_PORT: 4222
     ports:
       - "4223:4223"
+    volumes:
+    - ./config.yaml:/app/config.yaml:ro
