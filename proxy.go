@@ -56,13 +56,21 @@ func handleConnection(clientConn net.Conn) {
 	limitedUpstreamReader := ratelimit.Reader(upstreamConn, upstreamToClientBucket)
 	// Client -> Upstream
 	go func() {
-		var parser server.NATSProxyParser
-		parser.ParseAndForward(limitedClientReader, upstreamConn)
+		parser := server.NATSProxyParser{
+			LogFunc: func(direction, line string) {
+				fmt.Printf("C->S: %s", line)
+			},
+		}
+		parser.ParseAndForward(limitedClientReader, upstreamConn, "C->S")
 	}()
 
 	// Upstream -> Client
-	var parser server.NATSProxyParser
-	parser.ParseAndForward(limitedUpstreamReader, clientConn)
+	parser := server.NATSProxyParser{
+		LogFunc: func(direction, line string) {
+			fmt.Printf("S->C: %s", line)
+		},
+	}
+	parser.ParseAndForward(limitedUpstreamReader, clientConn, "S->C")
 }
 
 func main() {

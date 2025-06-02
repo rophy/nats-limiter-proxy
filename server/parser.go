@@ -16,8 +16,10 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"io"
 	"strconv"
+	"strings"
 )
 
 // Minimal parser state constants for proxy use
@@ -40,6 +42,7 @@ type NATSProxyParser struct {
 	as      int
 	drop    int
 	payload int
+	LogFunc func(direction string, line string)
 }
 
 // Reset resets the parser state.
@@ -53,9 +56,11 @@ func (p *NATSProxyParser) Reset() {
 }
 
 // ParseAndForward reads from r, parses NATS protocol, and writes all bytes to w.
-func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer) error {
+func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction string) error {
 	reader := bufio.NewReader(r)
 	buf := make([]byte, 0, 4096)
+	var username string // cache the authenticated user
+
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
@@ -78,6 +83,27 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer) error {
 				// End of line, flush
 				if _, err := w.Write(buf); err != nil {
 					return err
+				}
+				// Log the direction and line after parsing a line (for both PUB and non-PUB lines)
+				if p.LogFunc != nil {
+					line := string(buf)
+					p.LogFunc(direction, line)
+
+					// Detect CONNECT and cache/log user
+					if strings.HasPrefix(strings.TrimSpace(line), "CONNECT ") {
+						var obj map[string]interface{}
+						jsonStr := strings.TrimSpace(line)[8:]
+						if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
+							if user, ok := obj["user"].(string); ok {
+								username = user
+								p.LogFunc(direction, "Authenticated user: "+user)
+							}
+						}
+					}
+					// Log cached user on every message after authentication
+					if username != "" {
+						p.LogFunc(direction, "User: "+username)
+					}
 				}
 				buf = buf[:0]
 			}
@@ -149,16 +175,13 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer) error {
 				if _, err := w.Write(buf); err != nil {
 					return err
 				}
+				// Log cached user on every message after authentication
+				if p.LogFunc != nil && username != "" {
+					p.LogFunc(direction, "User: "+username)
+				}
 				buf = buf[:0]
 				p.state = psOpStart
 			}
-		}
-		// For non-PUB lines, flush on newline
-		if p.state == psOpStart && b == '\n' && len(buf) > 0 {
-			if _, err := w.Write(buf); err != nil {
-				return err
-			}
-			buf = buf[:0]
 		}
 	}
 }
