@@ -4,6 +4,7 @@ services:
     command: ["-c", "/nats-server.conf"]
     volumes:
       - ./local/nats-server.conf:/nats-server.conf
+      - ./local/jwt:/jwt
     ports:
       - "4222:4222"
       - "8222:8222"

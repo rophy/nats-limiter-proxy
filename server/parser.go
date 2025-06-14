@@ -20,6 +20,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Minimal parser state constants for proxy use
@@ -43,6 +45,32 @@ type NATSProxyParser struct {
 	drop    int
 	payload int
 	LogFunc func(direction string, line string)
+}
+
+func extractUsernameFromJWT(jwtToken string) string {
+	// Parse JWT without verification since we just need to extract claims
+	token, _ := jwt.ParseWithClaims(jwtToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
+		// Return nil to skip signature verification - we just need the claims
+		return nil, nil
+	})
+	
+	// Even with signature verification errors, we can still extract claims
+	if token != nil {
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			if name, exists := claims["name"]; exists {
+				if nameStr, ok := name.(string); ok {
+					return nameStr
+				}
+			}
+			if sub, exists := claims["sub"]; exists {
+				if subStr, ok := sub.(string); ok {
+					return subStr
+				}
+			}
+		}
+	}
+	
+	return ""
 }
 
 // Reset resets the parser state.
@@ -94,9 +122,17 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 						var obj map[string]interface{}
 						jsonStr := strings.TrimSpace(line)[8:]
 						if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
+							// Check for traditional username/password authentication
 							if user, ok := obj["user"].(string); ok {
 								username = user
-								p.LogFunc(direction, "Authenticated user: "+user)
+								p.LogFunc(direction, "Authenticated user (password): "+user)
+							} else if jwtToken, ok := obj["jwt"].(string); ok {
+								// Check for JWT authentication
+								user := extractUsernameFromJWT(jwtToken)
+								if user != "" {
+									username = user
+									p.LogFunc(direction, "Authenticated user (JWT): "+user)
+								}
 							}
 						}
 					}

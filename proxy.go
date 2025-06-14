@@ -13,6 +13,7 @@ import (
 
 	"nats-limiter-proxy/server"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/juju/ratelimit"
 	"gopkg.in/yaml.v3"
 )
@@ -83,6 +84,32 @@ func getBandwidthForUser(user string) int64 {
 	return config.DefaultBandwidth
 }
 
+func extractUsernameFromJWT(jwtToken string) string {
+	// Parse JWT without verification since we just need to extract claims
+	token, _ := jwt.ParseWithClaims(jwtToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
+		// Return nil to skip signature verification - we just need the claims
+		return nil, nil
+	})
+	
+	// Even with signature verification errors, we can still extract claims
+	if token != nil {
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			if name, exists := claims["name"]; exists {
+				if nameStr, ok := name.(string); ok {
+					return nameStr
+				}
+			}
+			if sub, exists := claims["sub"]; exists {
+				if subStr, ok := sub.(string); ok {
+					return subStr
+				}
+			}
+		}
+	}
+	
+	return ""
+}
+
 func handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
@@ -108,10 +135,19 @@ func handleConnection(clientConn net.Conn) {
 				var obj map[string]interface{}
 				jsonStr := strings.TrimSpace(line)[8:]
 				if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
+					// Check for traditional username/password authentication
 					if u, ok := obj["user"].(string); ok {
 						user = u
-						fmt.Printf("Authenticated user: %s\n", u)
+						fmt.Printf("Authenticated user (password): %s\n", u)
 						break
+					}
+					// Check for JWT authentication
+					if jwtToken, ok := obj["jwt"].(string); ok {
+						user = extractUsernameFromJWT(jwtToken)
+						if user != "" {
+							fmt.Printf("Authenticated user (JWT): %s\n", user)
+							break
+						}
 					}
 				}
 			}
