@@ -8,8 +8,8 @@ A NATS server proxy that adds per-user bandwidth limiting functionality. The pro
 
 ## Architecture
 
-- **proxy.go**: Main proxy server that handles TCP connections, extracts user authentication from NATS CONNECT messages, and applies rate limiting using token bucket algorithm
-- **server/parser.go**: NATS protocol parser that understands PUB, HPUB, and CONNECT messages, enabling the proxy to properly forward protocol data while maintaining message boundaries
+- **cmd/nats-limiter-proxy/main.go**: Main proxy server that handles TCP connections, extracts user authentication from NATS CONNECT messages, and applies rate limiting using token bucket algorithm
+- **internal/server/parser.go**: NATS protocol parser that understands PUB, HPUB, and CONNECT messages, enabling the proxy to properly forward protocol data while maintaining message boundaries
 - **config.yaml**: Configuration file defining default bandwidth limits and per-user overrides
 
 The proxy operates by:
@@ -23,7 +23,7 @@ The proxy operates by:
 ### Building and Running
 ```bash
 # Build the Go binary
-go build -o nats-limiter-proxy proxy.go
+go build -o nats-limiter-proxy ./cmd/nats-limiter-proxy
 
 # Run locally (requires UPSTREAM_HOST and UPSTREAM_PORT environment variables)
 UPSTREAM_HOST=localhost UPSTREAM_PORT=4222 ./nats-limiter-proxy

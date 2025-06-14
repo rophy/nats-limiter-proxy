@@ -9,7 +9,7 @@ RUN go mod download
 COPY . .
 
 # Build the Go app
-RUN go build -o nats-limiter-proxy proxy.go
+RUN go build -o nats-limiter-proxy ./cmd/nats-limiter-proxy
 
 # Use a minimal image for running
 FROM alpine:3.22.0

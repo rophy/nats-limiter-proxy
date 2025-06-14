@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -11,26 +11,38 @@ import (
 	"strings"
 	"sync"
 
-	"nats-limiter-proxy/server"
-
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/juju/ratelimit"
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	localPort = 4223
-)
-
-var (
-	upstreamHost string
-	upstreamPort int
-	config       *Config
-)
-
 type Config struct {
 	DefaultBandwidth int64            `yaml:"default_bandwidth"`
 	Users            map[string]int64 `yaml:"users"`
+}
+
+type Proxy struct {
+	upstreamHost string
+	upstreamPort int
+	config       *Config
+}
+
+type SwapReader struct {
+	mu     sync.RWMutex
+	reader io.Reader
+}
+
+func (s *SwapReader) Read(p []byte) (int, error) {
+	s.mu.RLock()
+	r := s.reader
+	s.mu.RUnlock()
+	return r.Read(p)
+}
+
+func (s *SwapReader) Swap(r io.Reader) {
+	s.mu.Lock()
+	s.reader = r
+	s.mu.Unlock()
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -50,41 +62,29 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func init() {
-	upstreamHost = os.Getenv("UPSTREAM_HOST")
-	if upstreamHost == "" {
-		fmt.Fprintln(os.Stderr, "Environment variable UPSTREAM_HOST is required")
-		os.Exit(1)
-	}
-	portStr := os.Getenv("UPSTREAM_PORT")
-	if portStr == "" {
-		fmt.Fprintln(os.Stderr, "Environment variable UPSTREAM_PORT is required")
-		os.Exit(1)
-	}
-	_, err := fmt.Sscanf(portStr, "%d", &upstreamPort)
-	if err != nil || upstreamPort <= 0 || upstreamPort > 65535 {
-		fmt.Fprintln(os.Stderr, "Invalid UPSTREAM_PORT value")
-		os.Exit(1)
-	}
-	// Load config.yaml
-	cfg, err := LoadConfig("config.yaml")
+func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy, error) {
+	config, err := LoadConfig(configPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to load config.yaml:", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
-	config = cfg
+
+	return &Proxy{
+		upstreamHost: upstreamHost,
+		upstreamPort: upstreamPort,
+		config:       config,
+	}, nil
 }
 
-func getBandwidthForUser(user string) int64 {
-	if user != "" && config.Users != nil {
-		if bw, ok := config.Users[user]; ok {
+func (p *Proxy) getBandwidthForUser(user string) int64 {
+	if user != "" && p.config.Users != nil {
+		if bw, ok := p.config.Users[user]; ok {
 			return bw
 		}
 	}
-	return config.DefaultBandwidth
+	return p.config.DefaultBandwidth
 }
 
-func extractUsernameFromJWT(jwtToken string) string {
+func (p *Proxy) extractUsernameFromJWT(jwtToken string) string {
 	// Parse JWT without verification since we just need to extract claims
 	token, _ := jwt.ParseWithClaims(jwtToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
 		// Return nil to skip signature verification - we just need the claims
@@ -110,10 +110,10 @@ func extractUsernameFromJWT(jwtToken string) string {
 	return ""
 }
 
-func handleConnection(clientConn net.Conn) {
+func (p *Proxy) HandleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", upstreamHost, upstreamPort))
+	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", p.upstreamHost, p.upstreamPort))
 	if err != nil {
 		fmt.Println("Failed to connect to upstream:", err)
 		return
@@ -143,7 +143,7 @@ func handleConnection(clientConn net.Conn) {
 					}
 					// Check for JWT authentication
 					if jwtToken, ok := obj["jwt"].(string); ok {
-						user = extractUsernameFromJWT(jwtToken)
+						user = p.extractUsernameFromJWT(jwtToken)
 						if user != "" {
 							fmt.Printf("Authenticated user (JWT): %s\n", user)
 							break
@@ -155,10 +155,10 @@ func handleConnection(clientConn net.Conn) {
 		}
 
 		// Step 2: Use the correct limiter for this user
-		limiter := ratelimit.NewBucketWithRate(float64(getBandwidthForUser(user)), getBandwidthForUser(user))
+		limiter := ratelimit.NewBucketWithRate(float64(p.getBandwidthForUser(user)), p.getBandwidthForUser(user))
 		limitedReader := ratelimit.Reader(io.MultiReader(buffer, clientConn), limiter)
 
-		parser := server.NATSProxyParser{
+		parser := NATSProxyParser{
 			LogFunc: func(direction, line string) {
 				fmt.Printf("C->S: %s", line)
 			},
@@ -167,49 +167,31 @@ func handleConnection(clientConn net.Conn) {
 	}()
 
 	// Upstream -> Client (use default bandwidth)
-	parser := server.NATSProxyParser{
+	parser := NATSProxyParser{
 		LogFunc: func(direction, line string) {
 			fmt.Printf("S->C: %s", line)
 		},
 	}
 	limitedUpstreamReader := ratelimit.Reader(upstreamConn, ratelimit.NewBucketWithRate(
-		float64(config.DefaultBandwidth),
-		config.DefaultBandwidth,
+		float64(p.config.DefaultBandwidth),
+		p.config.DefaultBandwidth,
 	))
 	parser.ParseAndForward(limitedUpstreamReader, clientConn, "S->C")
 }
 
-type SwapReader struct {
-	mu     sync.RWMutex
-	reader io.Reader
-}
-
-func (s *SwapReader) Read(p []byte) (int, error) {
-	s.mu.RLock()
-	r := s.reader
-	s.mu.RUnlock()
-	return r.Read(p)
-}
-
-func (s *SwapReader) Swap(r io.Reader) {
-	s.mu.Lock()
-	s.reader = r
-	s.mu.Unlock()
-}
-
-func main() {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", localPort))
+func (p *Proxy) Start(port int) error {
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		fmt.Println("Failed to listen:", err)
-		return
+		return fmt.Errorf("failed to listen on port %d: %w", port, err)
 	}
-	fmt.Printf("NATS proxy (TCP) listening on port %d\n", localPort)
+	fmt.Printf("NATS proxy (TCP) listening on port %d\n", port)
+	
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("Accept error:", err)
 			continue
 		}
-		go handleConnection(conn)
+		go p.HandleConnection(conn)
 	}
 }
