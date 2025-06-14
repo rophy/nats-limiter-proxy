@@ -84,18 +84,20 @@ func (p *NATSProxyParser) Reset() {
 }
 
 // ParseAndForward reads from r, parses NATS protocol, and writes all bytes to w.
-func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction string) error {
+// Returns the total number of bytes transferred.
+func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction string) (int64, error) {
 	reader := bufio.NewReader(r)
 	buf := make([]byte, 0, 4096)
 	var username string // cache the authenticated user
+	var totalBytes int64 // track total bytes transferred
 
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				return totalBytes, nil
 			}
-			return err
+			return totalBytes, err
 		}
 		buf = append(buf, b)
 
@@ -109,9 +111,11 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 				p.as = len(buf) - 1
 			} else if b == '\n' {
 				// End of line, flush
-				if _, err := w.Write(buf); err != nil {
-					return err
+				n, err := w.Write(buf)
+				if err != nil {
+					return totalBytes, err
 				}
+				totalBytes += int64(n)
 				// Log the direction and line after parsing a line (for both PUB and non-PUB lines)
 				if p.LogFunc != nil {
 					line := string(buf)
@@ -122,17 +126,21 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 						var obj map[string]interface{}
 						jsonStr := strings.TrimSpace(line)[8:]
 						if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
-							// Check for traditional username/password authentication
-							if user, ok := obj["user"].(string); ok {
+							// Check for traditional username/password authentication first
+							if user, ok := obj["user"].(string); ok && user != "" {
 								username = user
 								p.LogFunc(direction, "Authenticated user (password): "+user)
-							} else if jwtToken, ok := obj["jwt"].(string); ok {
-								// Check for JWT authentication
+							} else if jwtToken, ok := obj["jwt"].(string); ok && jwtToken != "" {
+								// Check for JWT authentication if no username provided
 								user := extractUsernameFromJWT(jwtToken)
 								if user != "" {
 									username = user
 									p.LogFunc(direction, "Authenticated user (JWT): "+user)
 								}
+							}
+							// Log warning if no authentication method worked
+							if username == "" {
+								p.LogFunc(direction, "Warning: CONNECT message contains no valid authentication")
 							}
 						}
 					}
@@ -208,9 +216,11 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 		case psMsgPayload:
 			if len(buf) >= p.as+p.payload+2 { // +2 for \r\n
 				// Got full payload
-				if _, err := w.Write(buf); err != nil {
-					return err
+				n, err := w.Write(buf)
+				if err != nil {
+					return totalBytes, err
 				}
+				totalBytes += int64(n)
 				// Log cached user on every message after authentication
 				if p.LogFunc != nil && username != "" {
 					p.LogFunc(direction, "User: "+username)

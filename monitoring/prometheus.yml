@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'nats-proxy'
+    static_configs:
+      - targets: ['proxy:8080']
+    scrape_interval: 5s
+    metrics_path: /metrics
+    
+  - job_name: 'nats-server'
+    static_configs:
+      - targets: ['nats:8222']
+    scrape_interval: 15s
+    metrics_path: /varz
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093

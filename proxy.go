@@ -135,19 +135,23 @@ func handleConnection(clientConn net.Conn) {
 				var obj map[string]interface{}
 				jsonStr := strings.TrimSpace(line)[8:]
 				if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
-					// Check for traditional username/password authentication
-					if u, ok := obj["user"].(string); ok {
+					// Check for traditional username/password authentication first
+					if u, ok := obj["user"].(string); ok && u != "" {
 						user = u
 						fmt.Printf("Authenticated user (password): %s\n", u)
 						break
 					}
-					// Check for JWT authentication
-					if jwtToken, ok := obj["jwt"].(string); ok {
+					// Check for JWT authentication if no username provided
+					if jwtToken, ok := obj["jwt"].(string); ok && jwtToken != "" {
 						user = extractUsernameFromJWT(jwtToken)
 						if user != "" {
 							fmt.Printf("Authenticated user (JWT): %s\n", user)
 							break
 						}
+					}
+					// If neither authentication method provided a username, log it
+					if user == "" {
+						fmt.Printf("Warning: CONNECT message contains no valid authentication\n")
 					}
 				}
 			}
@@ -155,7 +159,13 @@ func handleConnection(clientConn net.Conn) {
 		}
 
 		// Step 2: Use the correct limiter for this user
-		limiter := ratelimit.NewBucketWithRate(float64(getBandwidthForUser(user)), getBandwidthForUser(user))
+		bandwidthLimit := getBandwidthForUser(user)
+		// Use smaller bucket capacity to prevent excessive bursting
+		burstCapacity := bandwidthLimit / 10
+		if burstCapacity < 1024 {
+			burstCapacity = 1024 // Minimum 1KB burst
+		}
+		limiter := ratelimit.NewBucketWithRate(float64(bandwidthLimit), burstCapacity)
 		limitedReader := ratelimit.Reader(io.MultiReader(buffer, clientConn), limiter)
 
 		parser := server.NATSProxyParser{
