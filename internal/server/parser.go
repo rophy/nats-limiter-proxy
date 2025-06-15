@@ -44,7 +44,7 @@ type NATSProxyParser struct {
 	as      int
 	drop    int
 	payload int
-	LogFunc func(direction string, line string)
+	LogFunc func(direction string, line string, user string)
 }
 
 func extractUsernameFromJWT(jwtToken string) string {
@@ -115,9 +115,8 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 				// Log the direction and line after parsing a line (for both PUB and non-PUB lines)
 				if p.LogFunc != nil {
 					line := string(buf)
-					p.LogFunc(direction, line)
-
-					// Detect CONNECT and cache/log user
+					
+					// Detect CONNECT and cache user
 					if strings.HasPrefix(strings.TrimSpace(line), "CONNECT ") {
 						var obj map[string]interface{}
 						jsonStr := strings.TrimSpace(line)[8:]
@@ -125,21 +124,17 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 							// Check for traditional username/password authentication
 							if user, ok := obj["user"].(string); ok {
 								username = user
-								p.LogFunc(direction, "Authenticated user (password): "+user)
 							} else if jwtToken, ok := obj["jwt"].(string); ok {
 								// Check for JWT authentication
 								user := extractUsernameFromJWT(jwtToken)
 								if user != "" {
 									username = user
-									p.LogFunc(direction, "Authenticated user (JWT): "+user)
 								}
 							}
 						}
 					}
-					// Log cached user on every message after authentication
-					if username != "" {
-						p.LogFunc(direction, "User: "+username)
-					}
+					
+					p.LogFunc(direction, line, username)
 				}
 				buf = buf[:0]
 			}
@@ -211,9 +206,9 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 				if _, err := w.Write(buf); err != nil {
 					return err
 				}
-				// Log cached user on every message after authentication
-				if p.LogFunc != nil && username != "" {
-					p.LogFunc(direction, "User: "+username)
+				// Log with user context
+				if p.LogFunc != nil {
+					p.LogFunc(direction, "", username)
 				}
 				buf = buf[:0]
 				p.state = psOpStart

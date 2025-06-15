@@ -13,6 +13,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/juju/ratelimit"
+	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
 
@@ -115,7 +116,7 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 
 	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", p.upstreamHost, p.upstreamPort))
 	if err != nil {
-		fmt.Println("Failed to connect to upstream:", err)
+		log.Error().Err(err).Msg("Failed to connect to upstream")
 		return
 	}
 	defer upstreamConn.Close()
@@ -138,14 +139,14 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 					// Check for traditional username/password authentication
 					if u, ok := obj["user"].(string); ok {
 						user = u
-						fmt.Printf("Authenticated user (password): %s\n", u)
+						log.Info().Str("user", u).Str("auth_type", "password").Msg("User authenticated")
 						break
 					}
 					// Check for JWT authentication
 					if jwtToken, ok := obj["jwt"].(string); ok {
 						user = p.extractUsernameFromJWT(jwtToken)
 						if user != "" {
-							fmt.Printf("Authenticated user (JWT): %s\n", user)
+							log.Info().Str("user", user).Str("auth_type", "jwt").Msg("User authenticated")
 							break
 						}
 					}
@@ -159,8 +160,12 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 		limitedReader := ratelimit.Reader(io.MultiReader(buffer, clientConn), limiter)
 
 		parser := NATSProxyParser{
-			LogFunc: func(direction, line string) {
-				fmt.Printf("C->S: %s", line)
+			LogFunc: func(direction, line, contextUser string) {
+				if contextUser != "" {
+					log.Debug().Str("direction", direction).Str("user", contextUser).Msg("Protocol data")
+				} else {
+					log.Debug().Str("direction", direction).Msg("Protocol data")
+				}
 			},
 		}
 		parser.ParseAndForward(limitedReader, upstreamConn, "C->S")
@@ -168,8 +173,8 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 
 	// Upstream -> Client (use default bandwidth)
 	parser := NATSProxyParser{
-		LogFunc: func(direction, line string) {
-			fmt.Printf("S->C: %s", line)
+		LogFunc: func(direction, line, contextUser string) {
+			log.Debug().Str("direction", direction).Msg("Protocol data")
 		},
 	}
 	limitedUpstreamReader := ratelimit.Reader(upstreamConn, ratelimit.NewBucketWithRate(
@@ -184,12 +189,12 @@ func (p *Proxy) Start(port int) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %d: %w", port, err)
 	}
-	fmt.Printf("NATS proxy (TCP) listening on port %d\n", port)
+	log.Info().Int("port", port).Msg("NATS proxy listening")
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Accept error:", err)
+			log.Error().Err(err).Msg("Accept error")
 			continue
 		}
 		go p.HandleConnection(conn)

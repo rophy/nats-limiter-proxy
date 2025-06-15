@@ -22,7 +22,9 @@ services:
       dockerfile: Dockerfile
     environment:
       UPSTREAM_HOST: nats
-      UPSTREAM_PORT: 4222
+      UPSTREAM_PORT: "4222"
+      LOG_LEVEL: "debug"
+      
     ports:
       - "4223:4223"
     volumes:
