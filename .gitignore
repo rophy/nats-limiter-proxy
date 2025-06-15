@@ -32,4 +32,5 @@ go.work.sum
 # .vscode/
 
 bin/
-
+local/nats/resolver.conf
+local/nsc/
