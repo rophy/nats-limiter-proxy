@@ -94,6 +94,7 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 	// Client -> Upstream
 	go func() {
 		parser := ClientMessageParser{
+			RateLimiterManager: p.rateLimiterMgr,
 			OnUserAuthenticated: func(user string) {
 				log.Info().Str("user", user).Msg("User authenticated")
 			},
