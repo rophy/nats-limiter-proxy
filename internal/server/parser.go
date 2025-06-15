@@ -38,13 +38,14 @@ const (
 
 // NATSProxyParser parses and forwards NATS protocol data efficiently for proxying.
 type NATSProxyParser struct {
-	state   int
-	argBuf  []byte
-	msgBuf  []byte
-	as      int
-	drop    int
-	payload int
-	LogFunc func(direction string, line string, user string)
+	state      int
+	argBuf     []byte
+	msgBuf     []byte
+	as         int
+	drop       int
+	payload    int
+	LogFunc    func(direction string, line string, user string)
+	RateLimit  func(size int) // called for PUB message payload
 }
 
 func extractUsernameFromJWT(jwtToken string) string {
@@ -202,6 +203,11 @@ func (p *NATSProxyParser) ParseAndForward(r io.Reader, w io.Writer, direction st
 			}
 		case psMsgPayload:
 			if len(buf) >= p.as+p.payload+2 { // +2 for \r\n
+				// Apply rate limiting for PUB messages if user is authenticated
+				if p.RateLimit != nil && username != "" {
+					p.RateLimit(p.payload)
+				}
+				
 				// Got full payload
 				if _, err := w.Write(buf); err != nil {
 					return err

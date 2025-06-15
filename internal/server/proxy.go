@@ -1,14 +1,10 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -123,65 +119,44 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 
 	// Client -> Upstream
 	go func() {
-		// Step 1: Read until CONNECT is parsed
-		buffer := &bytes.Buffer{}
-		reader := bufio.NewReader(io.TeeReader(clientConn, buffer))
-		var user string
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				return
-			}
-			if strings.HasPrefix(strings.TrimSpace(line), "CONNECT ") {
-				var obj map[string]interface{}
-				jsonStr := strings.TrimSpace(line)[8:]
-				if err := json.Unmarshal([]byte(jsonStr), &obj); err == nil {
-					// Check for traditional username/password authentication
-					if u, ok := obj["user"].(string); ok {
-						user = u
-						log.Info().Str("user", u).Str("auth_type", "password").Msg("User authenticated")
-						break
-					}
-					// Check for JWT authentication
-					if jwtToken, ok := obj["jwt"].(string); ok {
-						user = p.extractUsernameFromJWT(jwtToken)
-						if user != "" {
-							log.Info().Str("user", user).Str("auth_type", "jwt").Msg("User authenticated")
-							break
-						}
-					}
-				}
-			}
-			// Stop after CONNECT, or keep reading if you want to support INFO before CONNECT
-		}
-
-		// Step 2: Use the correct limiter for this user
-		limiter := ratelimit.NewBucketWithRate(float64(p.getBandwidthForUser(user)), p.getBandwidthForUser(user))
-		limitedReader := ratelimit.Reader(io.MultiReader(buffer, clientConn), limiter)
-
+		// Create rate limiter function that will be used for authenticated PUB messages
+		var rateLimiter *ratelimit.Bucket
+		var currentUser string
+		
 		parser := NATSProxyParser{
 			LogFunc: func(direction, line, contextUser string) {
+				// Update rate limiter when user changes (after authentication)
+				if contextUser != "" && contextUser != currentUser {
+					currentUser = contextUser
+					bandwidth := p.getBandwidthForUser(contextUser)
+					rateLimiter = ratelimit.NewBucketWithRate(float64(bandwidth), bandwidth)
+					log.Info().Str("user", contextUser).Int64("bandwidth", bandwidth).Str("auth_type", "detected").Msg("User authenticated")
+				}
+				
 				if contextUser != "" {
 					log.Debug().Str("direction", direction).Str("user", contextUser).Msg("Protocol data")
 				} else {
 					log.Debug().Str("direction", direction).Msg("Protocol data")
 				}
 			},
+			RateLimit: func(size int) {
+				if rateLimiter != nil {
+					// Take tokens from bucket based on message size
+					rateLimiter.Wait(int64(size))
+				}
+			},
 		}
-		parser.ParseAndForward(limitedReader, upstreamConn, "C->S")
+		parser.ParseAndForward(clientConn, upstreamConn, "C->S")
 	}()
 
-	// Upstream -> Client (use default bandwidth)
+	// Upstream -> Client (no rate limiting needed)
 	parser := NATSProxyParser{
 		LogFunc: func(direction, line, contextUser string) {
 			log.Debug().Str("direction", direction).Msg("Protocol data")
 		},
+		// No RateLimit function - server responses are not rate limited
 	}
-	limitedUpstreamReader := ratelimit.Reader(upstreamConn, ratelimit.NewBucketWithRate(
-		float64(p.config.DefaultBandwidth),
-		p.config.DefaultBandwidth,
-	))
-	parser.ParseAndForward(limitedUpstreamReader, clientConn, "S->C")
+	parser.ParseAndForward(upstreamConn, clientConn, "S->C")
 }
 
 func (p *Proxy) Start(port int) error {
