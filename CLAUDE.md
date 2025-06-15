@@ -20,31 +20,48 @@ The proxy operates by:
 
 ## Development Commands
 
-### Building and Running
+### Initial Setup
 ```bash
-# Build the Go binary
-go build -o nats-limiter-proxy ./cmd/nats-limiter-proxy
-
-# Run locally (requires UPSTREAM_HOST and UPSTREAM_PORT environment variables)
-UPSTREAM_HOST=localhost UPSTREAM_PORT=4222 ./nats-limiter-proxy
-
-# Build and run with Docker Compose (recommended)
-docker compose up -d
-
-# Build Docker image
-docker build -t nats-limiter-proxy .
+# Initialize NATS accounts, operators, and users (required before first run)
+make init
 ```
 
-### Development Setup
+### Building and Running
 ```bash
-# Install NATS CLI tools for testing
-./local/install_nats_tools.sh
+# Build the Go binary (outputs to bin/ directory)
+make build
 
-# Start NATS server and proxy
-docker compose up -d
+# Run locally (requires UPSTREAM_HOST and UPSTREAM_PORT environment variables)
+make run
+
+# Build and run with Docker Compose (recommended - includes init)
+make docker-up
+
+# Stop Docker Compose services
+make docker-down
+
+# Build Docker image
+make docker-build
+
+# Run tests
+make test
+
+# Clean build artifacts and NATS configuration
+make clean
+```
+
+### Development Workflow
+```bash
+# First time setup
+make init
+make docker-up
 
 # Test connection through proxy (port 4223)
 nats --server=localhost:4223 --user=alice --password=alicepass pub test "hello world"
+
+# Development cycle
+make build
+make test
 ```
 
 ### Configuration
