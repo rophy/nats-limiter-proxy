@@ -90,7 +90,7 @@ func (p *Proxy) extractUsernameFromJWT(jwtToken string) string {
 		// Return nil to skip signature verification - we just need the claims
 		return nil, nil
 	})
-	
+
 	// Even with signature verification errors, we can still extract claims
 	if token != nil {
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
@@ -106,7 +106,7 @@ func (p *Proxy) extractUsernameFromJWT(jwtToken string) string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -185,7 +185,7 @@ func (p *Proxy) Start(port int) error {
 		return fmt.Errorf("failed to listen on port %d: %w", port, err)
 	}
 	fmt.Printf("NATS proxy (TCP) listening on port %d\n", port)
-	
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

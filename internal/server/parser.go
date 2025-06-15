@@ -53,7 +53,7 @@ func extractUsernameFromJWT(jwtToken string) string {
 		// Return nil to skip signature verification - we just need the claims
 		return nil, nil
 	})
-	
+
 	// Even with signature verification errors, we can still extract claims
 	if token != nil {
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
@@ -69,7 +69,7 @@ func extractUsernameFromJWT(jwtToken string) string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 

@@ -17,12 +17,12 @@ func main() {
 	if upstreamHost == "" {
 		log.Fatal("Environment variable UPSTREAM_HOST is required")
 	}
-	
+
 	portStr := os.Getenv("UPSTREAM_PORT")
 	if portStr == "" {
 		log.Fatal("Environment variable UPSTREAM_PORT is required")
 	}
-	
+
 	var upstreamPort int
 	_, err := fmt.Sscanf(portStr, "%d", &upstreamPort)
 	if err != nil || upstreamPort <= 0 || upstreamPort > 65535 {
