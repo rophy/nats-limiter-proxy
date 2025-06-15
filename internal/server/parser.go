@@ -231,7 +231,7 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 		case OP_CONNECT:
 			switch b {
 			case ' ', '\t':
-				continue
+				// do nothing.
 			default:
 				c.state = CONNECT_ARG
 				c.as = len(buf) - 1

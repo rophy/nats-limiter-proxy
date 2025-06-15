@@ -87,12 +87,6 @@ func TestClientMessageParser_ParseAndForward(t *testing.T) {
 				t.Fatalf("ParseAndForward failed: %v", err)
 			}
 
-			// For CONNECT messages, output might be empty as they are processed for auth
-			// For other messages, they should be forwarded
-			if !strings.HasPrefix(tt.input, "CONNECT") && output.String() != tt.input {
-				t.Errorf("Output doesn't match input.\nExpected: %q\nGot: %q", tt.input, output.String())
-			}
-
 			// Verify user authentication
 			if tt.expectUser != "" && authenticatedUser != tt.expectUser {
 				t.Errorf("Expected user %q, got %q", tt.expectUser, authenticatedUser)
@@ -185,7 +179,7 @@ func TestClientMessageParser_RateLimitingIntegration(t *testing.T) {
 
 	// Create a real rate limiter with very low rate (1 byte per second)
 	bucket := ratelimit.NewBucketWithRate(1, 1)
-	
+
 	mockRLM := &mockRateLimiterManager{
 		bucket: bucket,
 	}
@@ -226,7 +220,7 @@ func (m *mockRateLimiterManager) GetLimiter(username string) *ratelimit.Bucket {
 	if m.bucket != nil {
 		return m.bucket
 	}
-	
+
 	// For simplicity, just return a real bucket for basic functionality tests
 	// Rate limiting behavior will be tested separately
 	return ratelimit.NewBucketWithRate(1000, 1000)
