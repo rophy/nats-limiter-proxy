@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/juju/ratelimit"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
@@ -19,9 +18,10 @@ type Config struct {
 }
 
 type Proxy struct {
-	upstreamHost string
-	upstreamPort int
-	config       *Config
+	upstreamHost     string
+	upstreamPort     int
+	config           *Config
+	rateLimiterMgr   *RateLimiterManager
 }
 
 type SwapReader struct {
@@ -66,9 +66,10 @@ func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy,
 	}
 
 	return &Proxy{
-		upstreamHost: upstreamHost,
-		upstreamPort: upstreamPort,
-		config:       config,
+		upstreamHost:   upstreamHost,
+		upstreamPort:   upstreamPort,
+		config:         config,
+		rateLimiterMgr: NewRateLimiterManager(config),
 	}, nil
 }
 
@@ -119,17 +120,15 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 
 	// Client -> Upstream
 	go func() {
-		// Create rate limiter function that will be used for authenticated PUB messages
-		var rateLimiter *ratelimit.Bucket
+		// Track current user for this connection
 		var currentUser string
 		
 		parser := NATSProxyParser{
 			LogFunc: func(direction, line, contextUser string) {
-				// Update rate limiter when user changes (after authentication)
+				// Update current user when authentication changes
 				if contextUser != "" && contextUser != currentUser {
 					currentUser = contextUser
 					bandwidth := p.getBandwidthForUser(contextUser)
-					rateLimiter = ratelimit.NewBucketWithRate(float64(bandwidth), bandwidth)
 					log.Info().Str("user", contextUser).Int64("bandwidth", bandwidth).Str("auth_type", "detected").Msg("User authenticated")
 				}
 				
@@ -140,9 +139,13 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 				}
 			},
 			RateLimit: func(size int) {
-				if rateLimiter != nil {
-					// Take tokens from bucket based on message size
-					rateLimiter.Wait(int64(size))
+				if currentUser != "" {
+					// Get shared rate limiter for this user
+					rateLimiter := p.rateLimiterMgr.GetLimiter(currentUser)
+					if rateLimiter != nil {
+						// Take tokens from shared bucket based on message size
+						rateLimiter.Wait(int64(size))
+					}
 				}
 			},
 		}
