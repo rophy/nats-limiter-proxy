@@ -3,7 +3,8 @@ services:
     image: nats:2.11.4-alpine3.21
     volumes:
       - ./local/nats:/etc/nats
-      - ./local/jwt:/jwt
+      - nats-jwt:/jwt
+      - nats-data:/data
     ports:
       - "4222:4222"
       - "8222:8222"
@@ -11,11 +12,9 @@ services:
     image: natsio/nats-box:0.18.0-nonroot
     init: true
     command: ["sleep", "infinity"]
-    environment:
-      NATS_URL: nats://nats:4222
-      NATS_CREDS: /nsc/nkeys/creds/root/root/root.creds
     volumes:
       - ./local/nsc:/nsc
+      - ./local/scripts:/scripts
   proxy:
     image: nats-limiter-proxy
     build:
@@ -28,3 +27,6 @@ services:
       - "4223:4223"
     volumes:
     - ./config.yaml:/app/config.yaml:ro
+volumes:
+  nats-jwt:
+  nats-data:
