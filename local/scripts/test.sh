@@ -7,8 +7,8 @@ set -e
 # Expected: ~5MB burst + 95MB at 5MB/s = ~19 seconds total
 # Target rate: ~5.26MB/s average (much closer to 5MB/s limit)
 
-docker compose run -d --name=sub nats-box nats --context=bob bench sub test --msgs=100000
-docker compose run --name=pub nats-box nats --context=alice bench pub test --clients=2 --msgs=100000 --size=1024
+docker compose run -d --name=sub nats-box nats --context=bob bench sub test --no-progress --msgs=100000
+docker compose run --name=pub nats-box nats --context=alice bench pub test --no-progress --clients=2 --msgs=100000 --size=1024
 docker logs sub
 docker stop pub sub
 docker rm pub sub
