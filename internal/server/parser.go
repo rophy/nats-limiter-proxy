@@ -97,13 +97,18 @@ const (
 	OP_IGNORE
 )
 
+// RateLimiterManagerInterface defines the interface for rate limiter management
+type RateLimiterManagerInterface interface {
+	GetLimiter(username string) *ratelimit.Bucket
+}
+
 // ClientMessageParser parses and forwards NATS protocol data efficiently for proxying.
 type ClientMessageParser struct {
 	state               parserState
 	as                  int
 	drop                int
 	rateLimiter         *ratelimit.Bucket
-	RateLimiterManager  *RateLimiterManager
+	RateLimiterManager  RateLimiterManagerInterface
 	OnUserAuthenticated func(user string)
 }
 
