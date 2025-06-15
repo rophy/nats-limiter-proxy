@@ -7,7 +7,6 @@ import (
 	"os"
 	"sync"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
@@ -18,10 +17,10 @@ type Config struct {
 }
 
 type Proxy struct {
-	upstreamHost     string
-	upstreamPort     int
-	config           *Config
-	rateLimiterMgr   *RateLimiterManager
+	upstreamHost   string
+	upstreamPort   int
+	config         *Config
+	rateLimiterMgr *RateLimiterManager
 }
 
 type SwapReader struct {
@@ -82,32 +81,6 @@ func (p *Proxy) getBandwidthForUser(user string) int64 {
 	return p.config.DefaultBandwidth
 }
 
-func (p *Proxy) extractUsernameFromJWT(jwtToken string) string {
-	// Parse JWT without verification since we just need to extract claims
-	token, _ := jwt.ParseWithClaims(jwtToken, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// Return nil to skip signature verification - we just need the claims
-		return nil, nil
-	})
-
-	// Even with signature verification errors, we can still extract claims
-	if token != nil {
-		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			if name, exists := claims["name"]; exists {
-				if nameStr, ok := name.(string); ok {
-					return nameStr
-				}
-			}
-			if sub, exists := claims["sub"]; exists {
-				if subStr, ok := sub.(string); ok {
-					return subStr
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
 func (p *Proxy) HandleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
@@ -120,46 +93,15 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 
 	// Client -> Upstream
 	go func() {
-		// Track current user for this connection
-		var currentUser string
-		
-		parser := NATSProxyParser{
-			LogFunc: func(direction, line, contextUser string) {
-				// Update current user when authentication changes
-				if contextUser != "" && contextUser != currentUser {
-					currentUser = contextUser
-					bandwidth := p.getBandwidthForUser(contextUser)
-					log.Info().Str("user", contextUser).Int64("bandwidth", bandwidth).Str("auth_type", "detected").Msg("User authenticated")
-				}
-				
-				if contextUser != "" {
-					log.Debug().Str("direction", direction).Str("user", contextUser).Msg("Protocol data")
-				} else {
-					log.Debug().Str("direction", direction).Msg("Protocol data")
-				}
-			},
-			RateLimit: func(size int) {
-				if currentUser != "" {
-					// Get shared rate limiter for this user
-					rateLimiter := p.rateLimiterMgr.GetLimiter(currentUser)
-					if rateLimiter != nil {
-						// Take tokens from shared bucket based on message size
-						rateLimiter.Wait(int64(size))
-					}
-				}
+		parser := ClientMessageParser{
+			OnUserAuthenticated: func(user string) {
+				log.Info().Str("user", user).Msg("User authenticated")
 			},
 		}
-		parser.ParseAndForward(clientConn, upstreamConn, "C->S")
+		parser.ParseAndForward(clientConn, upstreamConn)
 	}()
 
-	// Upstream -> Client (no rate limiting needed)
-	parser := NATSProxyParser{
-		LogFunc: func(direction, line, contextUser string) {
-			log.Debug().Str("direction", direction).Msg("Protocol data")
-		},
-		// No RateLimit function - server responses are not rate limited
-	}
-	parser.ParseAndForward(upstreamConn, clientConn, "S->C")
+	io.Copy(clientConn, upstreamConn)
 }
 
 func (p *Proxy) Start(port int) error {
