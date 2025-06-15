@@ -29,8 +29,8 @@ docker-down:
 	docker compose down
 
 # Run tests
-test:
-	go test ./...
+test: docker-up
+	docker compose exec nats-box nats --context=alice bench pub test --size=1024 --msgs=10000
 
 local/nats/resolver.conf:
 	local/scripts/init.sh
