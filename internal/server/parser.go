@@ -394,3 +394,8 @@ func (c *ClientMessageParser) extractUsernameFromJWT(jwtToken string) string {
 
 	return ""
 }
+
+// GetUser returns the authenticated user name, or empty string if not authenticated
+func (c *ClientMessageParser) GetUser() string {
+	return c.user
+}

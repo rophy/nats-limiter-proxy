@@ -69,7 +69,6 @@ func TestClientMessageParser_ParseAndForward(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var output bytes.Buffer
-			var authenticatedUser string
 
 			// Create mock rate limiter manager
 			mockRLM := &mockRateLimiterManager{}
@@ -79,9 +78,6 @@ func TestClientMessageParser_ParseAndForward(t *testing.T) {
 				input,
 				&output,
 				mockRLM,
-				func(user string) {
-					authenticatedUser = user
-				},
 			)
 
 			err := parser.ParseAndForward()
@@ -91,8 +87,8 @@ func TestClientMessageParser_ParseAndForward(t *testing.T) {
 			}
 
 			// Verify user authentication
-			if tt.expectUser != "" && authenticatedUser != tt.expectUser {
-				t.Errorf("Expected user %q, got %q", tt.expectUser, authenticatedUser)
+			if tt.expectUser != "" && parser.GetUser() != tt.expectUser {
+				t.Errorf("Expected user %q, got %q", tt.expectUser, parser.GetUser())
 			}
 		})
 	}
@@ -100,7 +96,6 @@ func TestClientMessageParser_ParseAndForward(t *testing.T) {
 
 func TestClientMessageParser_MultipleMessages(t *testing.T) {
 	var output bytes.Buffer
-	var authenticatedUser string
 
 	mockRLM := &mockRateLimiterManager{}
 
@@ -112,9 +107,6 @@ func TestClientMessageParser_MultipleMessages(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		func(user string) {
-			authenticatedUser = user
-		},
 	)
 
 	err := parser.ParseAndForward()
@@ -123,8 +115,8 @@ func TestClientMessageParser_MultipleMessages(t *testing.T) {
 	}
 
 	// Verify user was authenticated
-	if authenticatedUser != "alice" {
-		t.Errorf("Expected user 'alice', got %q", authenticatedUser)
+	if parser.GetUser() != "alice" {
+		t.Errorf("Expected user 'alice', got %q", parser.GetUser())
 	}
 
 	// Verify all messages were forwarded correctly
@@ -156,7 +148,6 @@ func TestClientMessageParser_BufferDuplicationIssue(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		nil,
 	)
 
 	err := parser.ParseAndForward()
@@ -202,7 +193,6 @@ func TestClientMessageParser_RateLimitingOnBufferFlushes(t *testing.T) {
 	}
 	
 	var output bytes.Buffer
-	var authenticatedUser string
 
 	// Create moderately restrictive rate limiter (100 bytes/second)
 	bucket := ratelimit.NewBucketWithRate(100, 100)
@@ -224,9 +214,6 @@ func TestClientMessageParser_RateLimitingOnBufferFlushes(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		func(user string) {
-			authenticatedUser = user
-		},
 	)
 
 	start := time.Now()
@@ -236,8 +223,8 @@ func TestClientMessageParser_RateLimitingOnBufferFlushes(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	if authenticatedUser != "alice" {
-		t.Fatalf("Expected user 'alice', got %q", authenticatedUser)
+	if parser.GetUser() != "alice" {
+		t.Fatalf("Expected user 'alice', got %q", parser.GetUser())
 	}
 
 	// With 100 bytes/second and ~5000+ byte message, should see ~50+ second delay
@@ -259,7 +246,7 @@ func TestClientMessageParser_ExtractUsernameFromJWT(t *testing.T) {
 	// Create a dummy parser just to test the JWT extraction method
 	input := strings.NewReader("")
 	output := &bytes.Buffer{}
-	parser := NewClientMessageParser(input, output, nil, nil)
+	parser := NewClientMessageParser(input, output, nil)
 
 	tests := []struct {
 		name     string
@@ -321,7 +308,6 @@ func TestClientMessageParser_RateLimitingIntegration(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		nil,
 	)
 
 	// Measure the rate limiting delay
@@ -390,7 +376,6 @@ func TestClientMessageParser_LargePayload(t *testing.T) {
 				input,
 				&output,
 				mockRLM,
-				nil,
 			)
 
 			err := parser.ParseAndForward()
@@ -429,7 +414,6 @@ func TestClientMessageParser_LargeHPUBPayload(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		nil,
 	)
 
 	err := parser.ParseAndForward()
@@ -469,7 +453,6 @@ func TestClientMessageParser_MultipleLargeMessages(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		nil,
 	)
 
 	err := parser.ParseAndForward()
@@ -512,7 +495,6 @@ func TestClientMessageParser_BufferGrowthAndReuse(t *testing.T) {
 				input,
 				&output,
 				mockRLM,
-				nil,
 			)
 
 			err := parser.ParseAndForward()
@@ -542,7 +524,6 @@ func TestClientMessageParser_PartialReadScenarios(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		nil,
 	)
 
 	err := parser.ParseAndForward()
@@ -574,7 +555,6 @@ func TestClientMessageParser_ExtremelyLargePayload(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		nil,
 	)
 
 	err := parser.ParseAndForward()
@@ -598,7 +578,6 @@ func TestClientMessageParser_ExtremelyLargePayload(t *testing.T) {
 
 func TestClientMessageParser_RateLimitingWithLargeMessages(t *testing.T) {
 	var output bytes.Buffer
-	var authenticatedUser string
 
 	// Create a very restrictive rate limiter (10 bytes/second)
 	bucket := ratelimit.NewBucketWithRate(10, 10)
@@ -620,9 +599,6 @@ func TestClientMessageParser_RateLimitingWithLargeMessages(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		func(user string) {
-			authenticatedUser = user
-		},
 	)
 
 	start := time.Now()
@@ -632,8 +608,8 @@ func TestClientMessageParser_RateLimitingWithLargeMessages(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	if authenticatedUser != "alice" {
-		t.Fatalf("Expected user 'alice', got %q", authenticatedUser)
+	if parser.GetUser() != "alice" {
+		t.Fatalf("Expected user 'alice', got %q", parser.GetUser())
 	}
 
 	// With 10 bytes/second rate limit and ~1000 byte message, 
@@ -677,7 +653,6 @@ func TestClientMessageParser_RateLimitingAccuracy(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
-		nil,
 	)
 
 	start := time.Now()
