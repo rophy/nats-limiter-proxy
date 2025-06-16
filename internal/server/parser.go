@@ -20,6 +20,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/juju/ratelimit"
+	"github.com/rs/zerolog/log"
 )
 
 type parserState int
@@ -133,11 +134,12 @@ type ClientMessageParser struct {
 	clientReader *bufio.Reader
 	serverWriter *RateLimitedWriter
 
-	state               parserState
-	as                  int
-	drop                int
-	rateLimiterManager  RateLimiterManagerInterface
-	onUserAuthenticated func(user string)
+	state              parserState
+	as                 int
+	drop               int
+	rateLimiterManager RateLimiterManagerInterface
+
+	user string
 
 	// Fixed-size buffer for memory efficiency in high-throughput scenarios
 	buffer    [4096]byte // Fixed buffer - no growth
@@ -150,15 +152,13 @@ func NewClientMessageParser(
 	clientReader io.Reader,
 	serverWriter io.Writer,
 	rateLimiterManager RateLimiterManagerInterface,
-	onUserAuthenticated func(user string),
 ) *ClientMessageParser {
 	return &ClientMessageParser{
-		clientReader:        bufio.NewReader(clientReader),
-		serverWriter:        NewRateLimitedWriter(serverWriter),
-		state:               OP_START,
-		rateLimiterManager:  rateLimiterManager,
-		onUserAuthenticated: onUserAuthenticated,
-		bufferPos:           0, // Start with empty buffer
+		clientReader:       bufio.NewReader(clientReader),
+		serverWriter:       NewRateLimitedWriter(serverWriter),
+		state:              OP_START,
+		rateLimiterManager: rateLimiterManager,
+		bufferPos:          0, // Start with empty buffer
 	}
 }
 
@@ -356,13 +356,17 @@ func (c *ClientMessageParser) ParseAndForward() error {
 }
 
 func (c *ClientMessageParser) processUser(user string) {
+	if c.user != "" {
+		log.Warn().Str("oldUser", c.user).Str("newUser", user).Msg("User already authenticated, cannot re-authenticate")
+		return
+	}
+	log.Info().Str("user", user).Msg("User authenticated")
+	c.user = user
 	if c.rateLimiterManager != nil {
 		rateLimiter := c.rateLimiterManager.GetLimiter(user)
 		c.serverWriter.UpdateRateLimiter(rateLimiter)
 	}
-	if c.onUserAuthenticated != nil {
-		c.onUserAuthenticated(user)
-	}
+
 }
 
 func (c *ClientMessageParser) extractUsernameFromJWT(jwtToken string) string {

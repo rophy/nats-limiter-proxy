@@ -97,9 +97,6 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 			clientConn,
 			upstreamConn,
 			p.rateLimiterMgr,
-			func(user string) {
-				log.Info().Str("user", user).Msg("User authenticated")
-			},
 		)
 		parser.ParseAndForward()
 	}()
