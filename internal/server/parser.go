@@ -358,9 +358,7 @@ func (c *ClientMessageParser) ParseAndForward() error {
 func (c *ClientMessageParser) processUser(user string) {
 	if c.rateLimiterManager != nil {
 		rateLimiter := c.rateLimiterManager.GetLimiter(user)
-		if c.serverWriter.rateLimiter != nil {
-			c.serverWriter.rateLimiter = rateLimiter
-		}
+		c.serverWriter.UpdateRateLimiter(rateLimiter)
 	}
 	if c.onUserAuthenticated != nil {
 		c.onUserAuthenticated(user)
