@@ -108,10 +108,9 @@ type RateLimitedWriter struct {
 }
 
 // NewRateLimitedWriter creates a new rate-limited writer
-func NewRateLimitedWriter(w io.Writer, rateLimiter *ratelimit.Bucket) *RateLimitedWriter {
+func NewRateLimitedWriter(w io.Writer) *RateLimitedWriter {
 	return &RateLimitedWriter{
-		writer:      w,
-		rateLimiter: rateLimiter,
+		writer: w,
 	}
 }
 
@@ -131,38 +130,48 @@ func (rlw *RateLimitedWriter) UpdateRateLimiter(rateLimiter *ratelimit.Bucket) {
 
 // ClientMessageParser parses and forwards NATS protocol data efficiently for proxying.
 type ClientMessageParser struct {
+	clientReader *bufio.Reader
+	serverWriter *RateLimitedWriter
+
 	state               parserState
 	as                  int
 	drop                int
-	RateLimiterManager  RateLimiterManagerInterface
-	OnUserAuthenticated func(user string)
-	
+	rateLimiterManager  RateLimiterManagerInterface
+	onUserAuthenticated func(user string)
+
 	// Fixed-size buffer for memory efficiency in high-throughput scenarios
-	buffer              [4096]byte // Fixed buffer - no growth
-	bufferPos           int        // Current position in buffer
-	
-	// Rate-limited writer for consistent rate limiting on all writes
-	rateLimitedWriter   *RateLimitedWriter
+	buffer    [4096]byte // Fixed buffer - no growth
+	bufferPos int        // Current position in buffer
+
 }
 
-func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
-	reader := bufio.NewReader(r)
-	
-	// Initialize rate-limited writer if not already done
-	if c.rateLimitedWriter == nil {
-		c.rateLimitedWriter = NewRateLimitedWriter(w, nil)
-	} else {
-		// Update the underlying writer in case it changed
-		c.rateLimitedWriter.writer = w
+// NewClientMessageParser creates a new ClientMessageParser instance
+func NewClientMessageParser(
+	clientReader io.Reader,
+	serverWriter io.Writer,
+	rateLimiterManager RateLimiterManagerInterface,
+	onUserAuthenticated func(user string),
+) *ClientMessageParser {
+	return &ClientMessageParser{
+		clientReader:        bufio.NewReader(clientReader),
+		serverWriter:        NewRateLimitedWriter(serverWriter),
+		state:               OP_START,
+		rateLimiterManager:  rateLimiterManager,
+		onUserAuthenticated: onUserAuthenticated,
+		bufferPos:           0, // Start with empty buffer
 	}
-	
+}
+
+func (c *ClientMessageParser) ParseAndForward() error {
+	reader := c.clientReader
+
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
 			if err == io.EOF {
 				// Flush any remaining data in buffer
 				if c.bufferPos > 0 {
-					_, writeErr := c.rateLimitedWriter.Write(c.buffer[:c.bufferPos])
+					_, writeErr := c.serverWriter.Write(c.buffer[:c.bufferPos])
 					if writeErr != nil {
 						return writeErr
 					}
@@ -176,13 +185,13 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 		// Add byte to buffer
 		if c.bufferPos >= 4096 {
 			// Buffer full - flush it with rate limiting
-			_, err = c.rateLimitedWriter.Write(c.buffer[:])
+			_, err = c.serverWriter.Write(c.buffer[:])
 			if err != nil {
 				return err
 			}
 			c.bufferPos = 0
 		}
-		
+
 		c.buffer[c.bufferPos] = b
 		c.bufferPos++
 
@@ -310,7 +319,7 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 					if c.as < c.bufferPos-2 {
 						arg = c.buffer[c.as : c.bufferPos-2]
 					}
-					
+
 					var obj map[string]interface{}
 					if len(arg) > 0 && json.Unmarshal(arg, &obj) == nil {
 						if user, ok := obj["user"].(string); ok {
@@ -336,7 +345,7 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 		if c.drop == 1 && b == '\n' {
 			c.drop, c.state = 0, OP_START
 			// Message boundary reached - flush buffer to ensure message integrity
-			_, err = c.rateLimitedWriter.Write(c.buffer[:c.bufferPos])
+			_, err = c.serverWriter.Write(c.buffer[:c.bufferPos])
 			if err != nil {
 				return err
 			}
@@ -347,14 +356,14 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 }
 
 func (c *ClientMessageParser) processUser(user string) {
-	if c.RateLimiterManager != nil {
-		rateLimiter := c.RateLimiterManager.GetLimiter(user)
-		if c.rateLimitedWriter != nil {
-			c.rateLimitedWriter.UpdateRateLimiter(rateLimiter)
+	if c.rateLimiterManager != nil {
+		rateLimiter := c.rateLimiterManager.GetLimiter(user)
+		if c.serverWriter.rateLimiter != nil {
+			c.serverWriter.rateLimiter = rateLimiter
 		}
 	}
-	if c.OnUserAuthenticated != nil {
-		c.OnUserAuthenticated(user)
+	if c.onUserAuthenticated != nil {
+		c.onUserAuthenticated(user)
 	}
 }
 
