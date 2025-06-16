@@ -93,7 +93,6 @@ const (
 	OP_INF
 	OP_INFO
 	INFO_ARG
-	OP_RATE_LIMIT
 	OP_IGNORE
 )
 
@@ -102,28 +101,90 @@ type RateLimiterManagerInterface interface {
 	GetLimiter(username string) *ratelimit.Bucket
 }
 
+// RateLimitedWriter wraps an io.Writer and applies rate limiting to all writes
+type RateLimitedWriter struct {
+	writer      io.Writer
+	rateLimiter *ratelimit.Bucket
+}
+
+// NewRateLimitedWriter creates a new rate-limited writer
+func NewRateLimitedWriter(w io.Writer, rateLimiter *ratelimit.Bucket) *RateLimitedWriter {
+	return &RateLimitedWriter{
+		writer:      w,
+		rateLimiter: rateLimiter,
+	}
+}
+
+// Write applies rate limiting and writes data to the underlying writer
+func (rlw *RateLimitedWriter) Write(data []byte) (int, error) {
+	if rlw.rateLimiter != nil {
+		// Apply rate limiting for each byte
+		rlw.rateLimiter.Wait(int64(len(data)))
+	}
+	return rlw.writer.Write(data)
+}
+
+// UpdateRateLimiter updates the rate limiter (e.g., when user changes)
+func (rlw *RateLimitedWriter) UpdateRateLimiter(rateLimiter *ratelimit.Bucket) {
+	rlw.rateLimiter = rateLimiter
+}
+
 // ClientMessageParser parses and forwards NATS protocol data efficiently for proxying.
 type ClientMessageParser struct {
 	state               parserState
 	as                  int
 	drop                int
-	rateLimiter         *ratelimit.Bucket
 	RateLimiterManager  RateLimiterManagerInterface
 	OnUserAuthenticated func(user string)
+	
+	// Fixed-size buffer for memory efficiency in high-throughput scenarios
+	buffer              [4096]byte // Fixed buffer - no growth
+	bufferPos           int        // Current position in buffer
+	
+	// Rate-limited writer for consistent rate limiting on all writes
+	rateLimitedWriter   *RateLimitedWriter
 }
 
 func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 	reader := bufio.NewReader(r)
-	var buf = make([]byte, 0, 4096)
+	
+	// Initialize rate-limited writer if not already done
+	if c.rateLimitedWriter == nil {
+		c.rateLimitedWriter = NewRateLimitedWriter(w, nil)
+	} else {
+		// Update the underlying writer in case it changed
+		c.rateLimitedWriter.writer = w
+	}
+	
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
 			if err == io.EOF {
+				// Flush any remaining data in buffer
+				if c.bufferPos > 0 {
+					_, writeErr := c.rateLimitedWriter.Write(c.buffer[:c.bufferPos])
+					if writeErr != nil {
+						return writeErr
+					}
+					c.bufferPos = 0
+				}
 				return nil
 			}
 			return err
 		}
-		buf = append(buf, b)
+
+		// Add byte to buffer
+		if c.bufferPos >= 4096 {
+			// Buffer full - flush it with rate limiting
+			_, err = c.rateLimitedWriter.Write(c.buffer[:])
+			if err != nil {
+				return err
+			}
+			c.bufferPos = 0
+		}
+		
+		c.buffer[c.bufferPos] = b
+		c.bufferPos++
 
 		switch c.state {
 		case OP_START:
@@ -161,7 +222,7 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 		case OP_HPUB:
 			switch b {
 			case ' ', '\t':
-				c.state = OP_RATE_LIMIT
+				c.state = OP_IGNORE
 			default:
 				c.state = OP_IGNORE
 			}
@@ -182,7 +243,7 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 		case OP_PUB:
 			switch b {
 			case ' ', '\t':
-				c.state = OP_RATE_LIMIT
+				c.state = OP_IGNORE
 			default:
 				c.state = OP_IGNORE
 			}
@@ -234,7 +295,7 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 				// do nothing.
 			default:
 				c.state = CONNECT_ARG
-				c.as = len(buf) - 1
+				c.as = c.bufferPos - 1
 			}
 		case CONNECT_ARG:
 			switch b {
@@ -242,9 +303,16 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 				c.drop = 1
 			case '\n':
 				if c.drop > 0 {
-					arg := buf[c.as : len(buf)-2]
+					// Extract CONNECT argument from current buffer data
+					// Note: For CONNECT, we assume the entire message fits in buffer
+					// since CONNECT messages are typically small
+					var arg []byte
+					if c.as < c.bufferPos-2 {
+						arg = c.buffer[c.as : c.bufferPos-2]
+					}
+					
 					var obj map[string]interface{}
-					if err := json.Unmarshal([]byte(arg), &obj); err == nil {
+					if len(arg) > 0 && json.Unmarshal(arg, &obj) == nil {
 						if user, ok := obj["user"].(string); ok {
 							c.processUser(user)
 						} else if jwtToken, ok := obj["jwt"].(string); ok {
@@ -259,11 +327,7 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 				}
 			}
 		case OP_IGNORE:
-
-		case OP_RATE_LIMIT:
-			if c.rateLimiter != nil {
-				c.rateLimiter.Wait(1)
-			}
+			// Continue processing but don't change state
 		}
 
 		if c.drop == 0 && b == '\r' {
@@ -271,11 +335,12 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 		}
 		if c.drop == 1 && b == '\n' {
 			c.drop, c.state = 0, OP_START
-			_, err = w.Write(buf)
+			// Message boundary reached - flush buffer to ensure message integrity
+			_, err = c.rateLimitedWriter.Write(c.buffer[:c.bufferPos])
 			if err != nil {
 				return err
 			}
-			buf = buf[:0] // Reset buffer for next message
+			c.bufferPos = 0 // Reset buffer for next message
 		}
 
 	}
@@ -283,7 +348,10 @@ func (c *ClientMessageParser) ParseAndForward(r io.Reader, w io.Writer) error {
 
 func (c *ClientMessageParser) processUser(user string) {
 	if c.RateLimiterManager != nil {
-		c.rateLimiter = c.RateLimiterManager.GetLimiter(user)
+		rateLimiter := c.RateLimiterManager.GetLimiter(user)
+		if c.rateLimitedWriter != nil {
+			c.rateLimitedWriter.UpdateRateLimiter(rateLimiter)
+		}
 	}
 	if c.OnUserAuthenticated != nil {
 		c.OnUserAuthenticated(user)

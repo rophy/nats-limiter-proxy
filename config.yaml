@@ -1,4 +1,4 @@
 default_bandwidth: 102400  # 100KB/s
 users:
-  alice: 5242880   # 5MB/s
-  bob: 2097152     # 2MB/s
+  alice: 52428800   # 5MB/s
+  bob: 20971520     # 2MB/s
