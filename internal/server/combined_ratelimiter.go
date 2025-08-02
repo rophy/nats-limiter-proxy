@@ -18,9 +18,17 @@ func NewCombinedRateLimiter(local *LocalRateLimiter, global *GlobalRateLimiter) 
 	}
 }
 
-// GetLimiter returns the local rate limiter for a user (implements RateLimiterManagerInterface)
-func (crl *CombinedRateLimiter) GetLimiter(username string) *ratelimit.Bucket {
+// GetLocalLimiter returns the local rate limiter for a user (implements RateLimiterManagerInterface)
+func (crl *CombinedRateLimiter) GetLocalLimiter(username string) *ratelimit.Bucket {
 	return crl.localRateLimiter.GetLimiter(username)
+}
+
+// GetGlobalLimiter returns the global rate limiter for a user (implements RateLimiterManagerInterface)
+func (crl *CombinedRateLimiter) GetGlobalLimiter(username string) *ratelimit.Bucket {
+	if crl.globalRateLimiter != nil {
+		return crl.globalRateLimiter.GetGlobalBucket(username)
+	}
+	return nil // No global limiter in local mode
 }
 
 // TrackUsage tracks usage for global aggregation if enabled (implements UsageReporter interface)
@@ -29,6 +37,20 @@ func (crl *CombinedRateLimiter) TrackUsage(username string, bytesUsed int64) {
 		crl.globalRateLimiter.TrackUsage(username, bytesUsed)
 	}
 	// Note: Local rate limiter doesn't need usage tracking - it enforces statically
+}
+
+// UserConnected notifies that a user has connected
+func (crl *CombinedRateLimiter) UserConnected(username string) {
+	if crl.globalRateLimiter != nil {
+		crl.globalRateLimiter.UserConnected(username)
+	}
+}
+
+// UserDisconnected notifies that a user has disconnected
+func (crl *CombinedRateLimiter) UserDisconnected(username string) {
+	if crl.globalRateLimiter != nil {
+		crl.globalRateLimiter.UserDisconnected(username)
+	}
 }
 
 // Start starts both rate limiters

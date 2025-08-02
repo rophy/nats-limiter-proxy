@@ -97,9 +97,10 @@ const (
 	OP_IGNORE
 )
 
-// RateLimiterManagerInterface defines the interface for rate limiter management
+// RateLimiterManagerInterface defines the interface for dual rate limiter management
 type RateLimiterManagerInterface interface {
-	GetLimiter(username string) *ratelimit.Bucket
+	GetLocalLimiter(username string) *ratelimit.Bucket
+	GetGlobalLimiter(username string) *ratelimit.Bucket
 }
 
 // UsageReporter defines the interface for tracking usage statistics
@@ -107,10 +108,10 @@ type UsageReporter interface {
 	TrackUsage(username string, bytesUsed int64)
 }
 
-// RateLimitedWriter wraps an io.Writer and applies rate limiting to all writes
+// RateLimitedWriter wraps an io.Writer and applies dual rate limiting to all writes
 type RateLimitedWriter struct {
 	writer             io.Writer
-	rateLimiter        *ratelimit.Bucket
+	localRateLimiter   *ratelimit.Bucket  // Static local rate limiter
 	rateLimiterManager RateLimiterManagerInterface
 	username           string
 }
@@ -123,11 +124,20 @@ func NewRateLimitedWriter(w io.Writer, rateLimiterManager RateLimiterManagerInte
 	}
 }
 
-// Write applies rate limiting and writes data to the underlying writer
+// Write applies dual rate limiting (local AND global) and writes data to the underlying writer
 func (rlw *RateLimitedWriter) Write(data []byte) (int, error) {
-	if rlw.rateLimiter != nil {
-		// Apply rate limiting for each byte
-		rlw.rateLimiter.Wait(int64(len(data)))
+	dataLen := int64(len(data))
+	
+	// Apply local rate limiting (always available)
+	if rlw.localRateLimiter != nil {
+		rlw.localRateLimiter.Wait(dataLen)
+	}
+	
+	// Apply global rate limiting (get current bucket each time for real-time updates)
+	if rlw.rateLimiterManager != nil && rlw.username != "" {
+		if globalLimiter := rlw.rateLimiterManager.GetGlobalLimiter(rlw.username); globalLimiter != nil {
+			globalLimiter.Wait(dataLen)
+		}
 	}
 	
 	// Write the data
@@ -144,9 +154,9 @@ func (rlw *RateLimitedWriter) Write(data []byte) (int, error) {
 	return n, err
 }
 
-// UpdateRateLimiter updates the rate limiter (e.g., when user changes)
-func (rlw *RateLimitedWriter) UpdateRateLimiter(rateLimiter *ratelimit.Bucket) {
-	rlw.rateLimiter = rateLimiter
+// UpdateLocalRateLimiter updates the local rate limiter
+func (rlw *RateLimitedWriter) UpdateLocalRateLimiter(rateLimiter *ratelimit.Bucket) {
+	rlw.localRateLimiter = rateLimiter
 }
 
 // UpdateUser updates the username for usage tracking
@@ -388,9 +398,15 @@ func (c *ClientMessageParser) processUser(user string) {
 	log.Info().Str("user", user).Msg("User authenticated")
 	c.user = user
 	if c.rateLimiterManager != nil {
-		rateLimiter := c.rateLimiterManager.GetLimiter(user)
-		c.serverWriter.UpdateRateLimiter(rateLimiter)
+		localLimiter := c.rateLimiterManager.GetLocalLimiter(user)
+		// Note: We don't cache global limiter anymore - it's looked up dynamically
+		c.serverWriter.UpdateLocalRateLimiter(localLimiter)
 		c.serverWriter.UpdateUser(user)
+		
+		// Notify that user has connected (for global tracking)
+		if combined, ok := c.rateLimiterManager.(*CombinedRateLimiter); ok {
+			combined.UserConnected(user)
+		}
 	}
 
 }
@@ -430,6 +446,13 @@ func (c *ClientMessageParser) GetUser() string {
 func (c *ClientMessageParser) Disconnect() {
 	if c.user != "" {
 		log.Info().Str("user", c.user).Msg("User disconnected")
+		
+		// Notify that user has disconnected (for global tracking)
+		if c.rateLimiterManager != nil {
+			if combined, ok := c.rateLimiterManager.(*CombinedRateLimiter); ok {
+				combined.UserDisconnected(c.user)
+			}
+		}
 	} else {
 		log.Info().Msg("Client disconnected")
 	}

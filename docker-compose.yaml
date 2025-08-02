@@ -26,6 +26,7 @@ services:
   # Redis Sentinel for functional testing  
   redis-sentinel:
     image: redis:7-alpine
+    init: true
     command: >
       sh -c "
         echo 'Waiting for Redis master to be ready...' &&

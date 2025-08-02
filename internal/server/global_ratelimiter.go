@@ -6,19 +6,34 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juju/ratelimit"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
-// GlobalRateLimiter aggregates usage counters across all proxy instances
-// It does NOT enforce rate limits - that's handled by LocalRateLimiter
+// GlobalRateLimiter manages dynamic global rate limiting with Redis coordination
 type GlobalRateLimiter struct {
 	config       *Config
 	redisClient  *redis.Client
 	myPeerID     string
 	shutdown     chan struct{}
-	usageBuffers map[string]int64 // username -> bytes used since last sync
-	bufferMutex  sync.Mutex
+	
+	// Usage tracking
+	usageBuffers  map[string]int64         // username -> bytes used since last sync
+	usageStats    map[string]*GlobalUserStats // username -> connection stats
+	bufferMutex   sync.Mutex
+	
+	// Global rate limiting buckets
+	globalBuckets map[string]*ratelimit.Bucket // username -> dynamic global bucket
+	bucketsMutex  sync.RWMutex
+}
+
+// GlobalUserStats tracks connection statistics for a user in global rate limiter
+type GlobalUserStats struct {
+	TotalBytes      int64
+	TimeConnected   time.Time
+	ConnectionCount int    // Number of active connections for this user
+	mutex           sync.Mutex
 }
 
 // NewGlobalRateLimiter creates a new global rate limiter
@@ -28,10 +43,12 @@ func NewGlobalRateLimiter(config *Config, peerID string) (*GlobalRateLimiter, er
 	}
 
 	grl := &GlobalRateLimiter{
-		config:       config,
-		myPeerID:     peerID,
-		shutdown:     make(chan struct{}),
-		usageBuffers: make(map[string]int64),
+		config:        config,
+		myPeerID:      peerID,
+		shutdown:      make(chan struct{}),
+		usageBuffers:  make(map[string]int64),
+		usageStats:    make(map[string]*GlobalUserStats),
+		globalBuckets: make(map[string]*ratelimit.Bucket),
 	}
 
 	// Connect to Redis
@@ -68,19 +85,142 @@ func (grl *GlobalRateLimiter) connectToRedis() error {
 	return nil
 }
 
+// GetGlobalBucket returns or creates a global rate limiting bucket for a user
+func (grl *GlobalRateLimiter) GetGlobalBucket(username string) *ratelimit.Bucket {
+	grl.bucketsMutex.RLock()
+	if bucket, exists := grl.globalBuckets[username]; exists {
+		grl.bucketsMutex.RUnlock()
+		return bucket
+	}
+	grl.bucketsMutex.RUnlock()
+
+	// Create new global bucket under write lock
+	grl.bucketsMutex.Lock()
+	defer grl.bucketsMutex.Unlock()
+
+	// Double-check after acquiring write lock
+	if bucket, exists := grl.globalBuckets[username]; exists {
+		return bucket
+	}
+
+	// Get user's configured rate limit (same as local initially)
+	var rateLimit int64
+	if userLimit, exists := grl.config.Users[username]; exists {
+		rateLimit = userLimit
+	} else {
+		rateLimit = grl.config.DefaultBandwidth
+	}
+
+	// Create global bucket with same initial rate as local (will be rebalanced)
+	bucket := ratelimit.NewBucketWithRate(float64(rateLimit), rateLimit)
+	grl.globalBuckets[username] = bucket
+
+	log.Info().
+		Str("username", username).
+		Int64("initial_global_rate_bps", rateLimit).
+		Msg("Created global rate limiter bucket")
+
+	return bucket
+}
+
+// initializeUserStats initializes usage tracking for a user
+func (grl *GlobalRateLimiter) initializeUserStats(username string) {
+	grl.bufferMutex.Lock()
+	defer grl.bufferMutex.Unlock()
+	
+	if _, exists := grl.usageStats[username]; !exists {
+		grl.usageStats[username] = &GlobalUserStats{
+			TotalBytes:      0,
+			TimeConnected:   time.Now(),
+			ConnectionCount: 0,
+		}
+	}
+}
+
+// UserConnected increments connection count for a user
+func (grl *GlobalRateLimiter) UserConnected(username string) {
+	grl.bufferMutex.Lock()
+	defer grl.bufferMutex.Unlock()
+	
+	// Initialize user stats if they don't exist
+	if _, exists := grl.usageStats[username]; !exists {
+		grl.usageStats[username] = &GlobalUserStats{
+			TotalBytes:      0,
+			TimeConnected:   time.Now(),
+			ConnectionCount: 0,
+		}
+	}
+	
+	stats := grl.usageStats[username]
+	stats.mutex.Lock()
+	stats.ConnectionCount++
+	connectionCount := stats.ConnectionCount
+	stats.mutex.Unlock()
+	
+	log.Info().
+		Str("username", username).
+		Int("connection_count", connectionCount).
+		Msg("User connection added")
+}
+
+// UserDisconnected decrements connection count for a user and cleans up if needed
+func (grl *GlobalRateLimiter) UserDisconnected(username string) {
+	grl.bufferMutex.Lock()
+	defer grl.bufferMutex.Unlock()
+	
+	if stats, exists := grl.usageStats[username]; exists {
+		stats.mutex.Lock()
+		stats.ConnectionCount--
+		connectionCount := stats.ConnectionCount
+		stats.mutex.Unlock()
+		
+		log.Info().
+			Str("username", username).
+			Int("connection_count", connectionCount).
+			Msg("User connection removed")
+		
+		// If no more connections, clean up user stats and global bucket
+		if connectionCount <= 0 {
+			delete(grl.usageStats, username)
+			delete(grl.usageBuffers, username)
+			
+			// Also clean up global bucket to stop rebalancing
+			grl.bucketsMutex.Lock()
+			delete(grl.globalBuckets, username)
+			grl.bucketsMutex.Unlock()
+			
+			log.Info().
+				Str("username", username).
+				Msg("Cleaned up user stats and global bucket - no active connections")
+		}
+	}
+}
+
 // TrackUsage records usage for a user (implements UsageReporter interface)
 func (grl *GlobalRateLimiter) TrackUsage(username string, bytesUsed int64) {
 	grl.bufferMutex.Lock()
+	defer grl.bufferMutex.Unlock()
+	
+	// Update buffer for Redis sync
 	grl.usageBuffers[username] += bytesUsed
-	grl.bufferMutex.Unlock()
+	
+	// Update total usage stats
+	if stats, exists := grl.usageStats[username]; exists {
+		stats.mutex.Lock()
+		stats.TotalBytes += bytesUsed
+		stats.mutex.Unlock()
+	}
 }
 
 // Start begins the global rate limiter
 func (grl *GlobalRateLimiter) Start() error {
 	log.Info().Msg("Starting global rate limiter")
 	
-	// Start periodic sync to Redis
-	go grl.syncLoop()
+	// Start 1-second Redis publishing loop
+	go grl.publishLoop()
+	
+	// Start 5-second rebalancing loop
+	go grl.rebalanceLoop()
 	
 	return nil
 }
@@ -95,117 +235,161 @@ func (grl *GlobalRateLimiter) Stop() {
 	}
 }
 
-// syncLoop periodically syncs usage data to Redis
-func (grl *GlobalRateLimiter) syncLoop() {
-	ticker := time.NewTicker(grl.config.Redis.SyncInterval)
+// publishLoop publishes usage data to Redis every 1 second
+func (grl *GlobalRateLimiter) publishLoop() {
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			grl.syncUsageToRedis()
+			grl.publishUsageToRedis()
 		case <-grl.shutdown:
 			return
 		}
 	}
 }
 
-// syncUsageToRedis syncs buffered usage data to Redis
-func (grl *GlobalRateLimiter) syncUsageToRedis() {
-	grl.bufferMutex.Lock()
-	// Copy and reset buffers
-	currentUsage := make(map[string]int64)
-	for username, bytes := range grl.usageBuffers {
-		currentUsage[username] = bytes
-		grl.usageBuffers[username] = 0
-	}
-	grl.bufferMutex.Unlock()
+// rebalanceLoop rebalances global quotas every 5 seconds
+func (grl *GlobalRateLimiter) rebalanceLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-	if len(currentUsage) == 0 {
-		return // Nothing to sync
+	for {
+		select {
+		case <-ticker.C:
+			grl.rebalanceGlobalQuotas()
+		case <-grl.shutdown:
+			return
+		}
 	}
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// publishUsageToRedis publishes current usage data to Redis every 1 second
+func (grl *GlobalRateLimiter) publishUsageToRedis() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Store usage data with current timestamp
-	timestamp := time.Now().Unix()
-	
-	for username, bytesUsed := range currentUsage {
-		if bytesUsed == 0 {
+	grl.bufferMutex.Lock()
+	defer grl.bufferMutex.Unlock()
+
+	for username, stats := range grl.usageStats {
+		stats.mutex.Lock()
+		totalBytes := stats.TotalBytes
+		timeConnected := stats.TimeConnected
+		connectionCount := stats.ConnectionCount
+		stats.mutex.Unlock()
+
+		// Only publish if user has active connections
+		if connectionCount <= 0 {
+			log.Debug().
+				Str("username", username).
+				Msg("Skipping publish - no active connections")
 			continue
 		}
 
-		// Store current usage with TTL
-		key := fmt.Sprintf("global_usage:%s:%s:%d", username, grl.myPeerID, timestamp)
-		
+		// Calculate current MB/s for this user on this proxy
+		duration := time.Since(timeConnected).Seconds()
+		if duration < 1.0 {
+			duration = 1.0 // Avoid division by zero
+		}
+		currentMBps := float64(totalBytes) / (1024 * 1024) / duration
+
+		// Publish to Redis with 3-second TTL (if proxy stops, it gets removed)
 		pipe := grl.redisClient.Pipeline()
-		pipe.Set(ctx, key, bytesUsed, 5*time.Minute) // TTL for cleanup
 		
-		// Also maintain an aggregate counter (sliding window sum)
-		aggregateKey := fmt.Sprintf("global_aggregate:%s", username)
-		pipe.ZAdd(ctx, aggregateKey, redis.Z{
-			Score:  float64(timestamp),
-			Member: fmt.Sprintf("%s:%d", grl.myPeerID, bytesUsed),
-		})
-		pipe.ZRemRangeByScore(ctx, aggregateKey, "0", fmt.Sprintf("%d", timestamp-300)) // Keep 5 minutes
-		pipe.Expire(ctx, aggregateKey, 10*time.Minute)
+		// Track this proxy as connected for this user
+		proxyKey := fmt.Sprintf("user:%s:proxies", username)
+		pipe.SAdd(ctx, proxyKey, grl.myPeerID)
+		pipe.Expire(ctx, proxyKey, 3*time.Second)
+		
+		// Track current MB/s for this proxy
+		usageKey := fmt.Sprintf("user:%s:usage:%s", username, grl.myPeerID)
+		pipe.Set(ctx, usageKey, fmt.Sprintf("%.3f", currentMBps), 3*time.Second)
 		
 		if _, err := pipe.Exec(ctx); err != nil {
 			log.Error().Err(err).
 				Str("username", username).
-				Msg("Failed to sync usage to Redis")
+				Msg("Failed to publish usage to Redis")
 		} else {
 			log.Debug().
 				Str("username", username).
-				Int64("bytes_used", bytesUsed).
-				Msg("Synced usage to global counter")
+				Float64("current_mbps", currentMBps).
+				Int("connection_count", connectionCount).
+				Str("proxy_id", grl.myPeerID).
+				Msg("Published usage to Redis")
 		}
 	}
 }
 
-// GetGlobalUsage returns aggregated usage across all proxies for a user
-func (grl *GlobalRateLimiter) GetGlobalUsage(username string) (map[string]int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+// rebalanceGlobalQuotas rebalances global rate limits every 5 seconds
+func (grl *GlobalRateLimiter) rebalanceGlobalQuotas() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	aggregateKey := fmt.Sprintf("global_aggregate:%s", username)
-	
-	// Get all entries from the last 5 minutes
-	now := time.Now().Unix()
-	entries, err := grl.redisClient.ZRangeByScore(ctx, aggregateKey, &redis.ZRangeBy{
-		Min: fmt.Sprintf("%d", now-300),
-		Max: fmt.Sprintf("%d", now),
-	}).Result()
-	
-	if err != nil {
-		return nil, fmt.Errorf("failed to get global usage: %w", err)
+	grl.bucketsMutex.RLock()
+	usernames := make([]string, 0, len(grl.globalBuckets))
+	for username := range grl.globalBuckets {
+		usernames = append(usernames, username)
 	}
+	grl.bucketsMutex.RUnlock()
 
-	usage := make(map[string]int64)
-	for _, entry := range entries {
-		// Parse "peerID:bytes" format
-		var peerID string
-		var bytes int64
-		if n, err := fmt.Sscanf(entry, "%[^:]:%d", &peerID, &bytes); n == 2 && err == nil {
-			usage[peerID] += bytes
-		}
+	for _, username := range usernames {
+		grl.rebalanceUserQuota(ctx, username)
 	}
-
-	return usage, nil
 }
 
-// GetTotalGlobalUsage returns total usage across all proxies for a user
-func (grl *GlobalRateLimiter) GetTotalGlobalUsage(username string) (int64, error) {
-	usage, err := grl.GetGlobalUsage(username)
-	if err != nil {
-		return 0, err
+// rebalanceUserQuota rebalances quota for a specific user
+func (grl *GlobalRateLimiter) rebalanceUserQuota(ctx context.Context, username string) {
+	// Get user's total configured quota
+	var totalQuota int64
+	if userLimit, exists := grl.config.Users[username]; exists {
+		totalQuota = userLimit
+	} else {
+		totalQuota = grl.config.DefaultBandwidth
 	}
 
-	var total int64
-	for _, bytes := range usage {
-		total += bytes
+	// Get number of connected proxies for this user
+	proxyKey := fmt.Sprintf("user:%s:proxies", username)
+	proxies, err := grl.redisClient.SMembers(ctx, proxyKey).Result()
+	if err != nil {
+		log.Error().Err(err).
+			Str("username", username).
+			Msg("Failed to get connected proxies from Redis")
+		return
 	}
-	
-	return total, nil
+
+	proxyCount := len(proxies)
+	if proxyCount == 0 {
+		// No proxies connected, keep current quota
+		log.Debug().
+			Str("username", username).
+			Msg("No proxies found in Redis, keeping current quota")
+		return
+	}
+
+	// Calculate even distribution
+	quotaPerProxy := totalQuota / int64(proxyCount)
+	if quotaPerProxy < 1024 { // Minimum 1KB/s
+		quotaPerProxy = 1024
+	}
+
+	// Update this proxy's global rate limiter bucket
+	grl.bucketsMutex.Lock()
+	if _, exists := grl.globalBuckets[username]; exists {
+		// Replace bucket with new rate (juju/ratelimit doesn't have SetRate)
+		newBucket := ratelimit.NewBucketWithRate(float64(quotaPerProxy), quotaPerProxy)
+		grl.globalBuckets[username] = newBucket
+		grl.bucketsMutex.Unlock()
+
+		log.Info().
+			Str("username", username).
+			Int("proxy_count", proxyCount).
+			Int64("total_quota_bps", totalQuota).
+			Int64("new_quota_per_proxy_bps", quotaPerProxy).
+			Float64("new_rate_mbps", float64(quotaPerProxy)/(1024*1024)).
+			Msg("Rebalanced global quota")
+	} else {
+		grl.bucketsMutex.Unlock()
+	}
 }
