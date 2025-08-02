@@ -3,7 +3,10 @@ users:
   alice: 5242880   # 5MB/s
   bob: 2097152     # 2MB/s
 
-# Redis coordination settings for distributed rate limiting
+# Global rate limiting mode - local enforcement + global usage aggregation
+rate_limit_mode: "global"
+
+# Redis coordination settings for global usage tracking
 redis:
   enabled: true                           # Enable Redis coordination
   redis_sentinels: ["redis-sentinel:26379"]  # Redis Sentinel addresses

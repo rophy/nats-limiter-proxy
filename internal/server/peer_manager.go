@@ -282,15 +282,31 @@ func (pm *PeerManager) getMyIP() string {
 	return localAddr.IP.String()
 }
 
-// GeneratePeerID generates a unique peer ID for this instance
+// GeneratePeerID generates a stable peer ID for this instance
 func GeneratePeerID() string {
-	// Try to use hostname first
+	// For Docker Compose: use hostname (container ID) for stability
 	if hostname, err := os.Hostname(); err == nil {
+		// Shorten container ID to first 12 characters for readability
+		if len(hostname) > 12 {
+			return hostname[:12]
+		}
 		return hostname
 	}
 	
-	// Fall back to random ID
-	return fmt.Sprintf("peer-%d", rand.Int63())
+	// For other environments: try to use IP address for stability
+	if ip := getMyIP(); ip != "127.0.0.1" && ip != "" {
+		// Use last octet of IP for shorter ID
+		parts := strings.Split(ip, ".")
+		if len(parts) == 4 {
+			return fmt.Sprintf("proxy-%s", parts[3])
+		}
+		return fmt.Sprintf("proxy-%s", strings.ReplaceAll(ip, ".", "-"))
+	}
+	
+	// Final fallback: still random but warn about it
+	id := fmt.Sprintf("peer-%d", rand.Int63())
+	log.Warn().Str("peer_id", id).Msg("Using random peer ID - coordination may be inconsistent across restarts")
+	return id
 }
 
 // ParseCoordinationPort extracts port from address string

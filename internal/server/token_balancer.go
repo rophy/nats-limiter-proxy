@@ -40,10 +40,10 @@ func NewTokenBalancer(coordinator Coordinator) *TokenBalancer {
 		localBuckets:     make(map[string]*ratelimit.Bucket),
 		allocations:      make(map[string]map[string]int64),
 		shutdownChan:     make(chan struct{}),
-		minAllocation:    1024,    // 1KB/s minimum
-		maxReallocation:  0.5,     // 50% max change per cycle
-		demandMultiplier: 1.2,     // 20% buffer for demand
-		burstRatio:       0.1,     // 10% burst capacity
+		minAllocation:    1024 * 1024,  // 1MB/s minimum (not 1KB/s)
+		maxReallocation:  0.5,          // 50% max change per cycle
+		demandMultiplier: 1.2,          // 20% buffer for demand
+		burstRatio:       1.0,          // 100% burst capacity (not 10%)
 	}
 }
 
@@ -244,18 +244,38 @@ func (tb *TokenBalancer) sumDemands(demands map[string]float64) float64 {
 func (tb *TokenBalancer) calculateOptimalAllocations(demands map[string]float64, totalDemand float64, globalLimit int64) map[string]int64 {
 	allocations := make(map[string]int64)
 	
+	// Prevent over-splitting: if too many peers would result in tiny allocations,
+	// limit the number of peers considered
+	maxPeers := int(globalLimit / tb.minAllocation)
+	if len(demands) > maxPeers {
+		log.Warn().
+			Int("peer_count", len(demands)).
+			Int("max_peers", maxPeers).
+			Int64("global_limit_mb", globalLimit/(1024*1024)).
+			Msg("Too many peers for reasonable allocation - limiting peer count")
+		
+		// Only consider the top peers by demand
+		demands = tb.limitToTopPeers(demands, maxPeers)
+		totalDemand = tb.sumDemands(demands)
+	}
+	
 	if totalDemand <= float64(globalLimit) {
 		// Sufficient capacity - give each peer what it needs
 		for peerID, demand := range demands {
-			allocations[peerID] = int64(math.Ceil(demand))
+			allocation := int64(math.Ceil(demand))
+			// Ensure minimum allocation in MB/s units
+			if allocation < tb.minAllocation {
+				allocation = tb.minAllocation
+			}
+			allocations[peerID] = allocation
 		}
 	} else {
-		// Over capacity - proportional allocation
+		// Over capacity - proportional allocation but never below minimum
 		for peerID, demand := range demands {
 			proportion := demand / totalDemand
 			allocation := int64(float64(globalLimit) * proportion)
 			
-			// Ensure minimum allocation
+			// Ensure minimum allocation in MB/s units
 			if allocation < tb.minAllocation {
 				allocation = tb.minAllocation
 			}
@@ -265,6 +285,42 @@ func (tb *TokenBalancer) calculateOptimalAllocations(demands map[string]float64,
 	}
 	
 	return allocations
+}
+
+// limitToTopPeers limits the demands map to the top N peers by demand
+func (tb *TokenBalancer) limitToTopPeers(demands map[string]float64, maxPeers int) map[string]float64 {
+	type peerDemand struct {
+		peerID string
+		demand float64
+	}
+	
+	// Convert to slice for sorting
+	peers := make([]peerDemand, 0, len(demands))
+	for peerID, demand := range demands {
+		peers = append(peers, peerDemand{peerID: peerID, demand: demand})
+	}
+	
+	// Sort by demand (highest first)
+	for i := 0; i < len(peers); i++ {
+		for j := i + 1; j < len(peers); j++ {
+			if peers[j].demand > peers[i].demand {
+				peers[i], peers[j] = peers[j], peers[i]
+			}
+		}
+	}
+	
+	// Take top maxPeers
+	if len(peers) > maxPeers {
+		peers = peers[:maxPeers]
+	}
+	
+	// Convert back to map
+	result := make(map[string]float64)
+	for _, peer := range peers {
+		result[peer.peerID] = peer.demand
+	}
+	
+	return result
 }
 
 // applyGradualReallocation applies new allocations gradually

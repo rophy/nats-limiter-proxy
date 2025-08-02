@@ -15,17 +15,18 @@ import (
 type Config struct {
 	DefaultBandwidth int64                     `yaml:"default_bandwidth"`
 	Users            map[string]int64          `yaml:"users"`
+	RateLimitMode    string                    `yaml:"rate_limit_mode"`     // "local" or "global" 
 	Coordination     *CoordinationConfig       `yaml:"coordination"`        // Legacy gossip config (deprecated)
-	Redis            *RedisCoordinationConfig  `yaml:"redis"`               // New Redis coordination config
+	Redis            *RedisCoordinationConfig  `yaml:"redis"`               // Redis config for global mode
 }
 
 type Proxy struct {
-	upstreamHost     string
-	upstreamPort     int
-	config           *Config
-	rateLimiterMgr   RateLimiterManagerInterface
-	peerCoordinator  *PeerCoordinator       // Legacy gossip coordinator
-	redisCoordinator *RedisCoordinator      // New Redis coordinator
+	upstreamHost      string
+	upstreamPort      int
+	config            *Config
+	rateLimiter       *CombinedRateLimiter   // Combined local + global rate limiting
+	peerCoordinator   *PeerCoordinator       // Legacy gossip coordinator (deprecated)
+	redisCoordinator  *RedisCoordinator      // Legacy Redis coordinator (deprecated)
 }
 
 type SwapReader struct {
@@ -116,31 +117,41 @@ func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy,
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	var rateLimiterMgr RateLimiterManagerInterface
-	var redisCoordinator *RedisCoordinator
-	
-	// Redis coordination takes precedence over legacy gossip
-	if config.Redis.Enabled {
-		peerID := GeneratePeerID()
-		redisCoordinator = NewRedisCoordinator(config.Redis, peerID)
-		redisCoordinator.SetConfig(config)
-		
-		// Use distributed rate limiter manager with Redis coordinator
-		distributedRLM := NewDistributedRateLimiterManagerWithRedis(config, redisCoordinator)
-		distributedRLM.Start()
-		rateLimiterMgr = distributedRLM
-	} else {
-		// Use simple rate limiter manager (no coordination)
-		rateLimiterMgr = NewRateLimiterManager(config)
-		log.Info().Msg("Running in standalone mode - no distributed coordination")
+	// Set default rate limit mode if not specified
+	if config.RateLimitMode == "" {
+		config.RateLimitMode = "local" // Default to local mode
 	}
 
+	// Always create local rate limiter (for enforcement)
+	localRateLimiter := NewLocalRateLimiter(config)
+
+	var globalRateLimiter *GlobalRateLimiter
+	
+	// Create global rate limiter if in global mode
+	if config.RateLimitMode == "global" {
+		if !config.Redis.Enabled {
+			return nil, fmt.Errorf("global rate limiting requires Redis to be enabled")
+		}
+		
+		peerID := GeneratePeerID()
+		globalRateLimiter, err = NewGlobalRateLimiter(config, peerID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create global rate limiter: %w", err)
+		}
+		
+		log.Info().Str("peer_id", peerID).Msg("Running in global rate limiting mode")
+	} else {
+		log.Info().Msg("Running in local rate limiting mode")
+	}
+
+	// Create combined rate limiter
+	rateLimiter := NewCombinedRateLimiter(localRateLimiter, globalRateLimiter)
+
 	return &Proxy{
-		upstreamHost:     upstreamHost,
-		upstreamPort:     upstreamPort,
-		config:           config,
-		rateLimiterMgr:   rateLimiterMgr,
-		redisCoordinator: redisCoordinator,
+		upstreamHost: upstreamHost,
+		upstreamPort: upstreamPort,
+		config:       config,
+		rateLimiter:  rateLimiter,
 	}, nil
 }
 
@@ -163,13 +174,16 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 	}
 	defer upstreamConn.Close()
 
+	// Create parser for tracking connection state
+	parser := NewClientMessageParser(
+		clientConn,
+		upstreamConn,
+		p.rateLimiter,
+	)
+
 	// Client -> Upstream
 	go func() {
-		parser := NewClientMessageParser(
-			clientConn,
-			upstreamConn,
-			p.rateLimiterMgr,
-		)
+		defer parser.Disconnect()
 		parser.ParseAndForward()
 	}()
 
@@ -177,12 +191,9 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 }
 
 func (p *Proxy) Start(port int) error {
-	// Start Redis coordination if enabled
-	if p.redisCoordinator != nil {
-		if err := p.redisCoordinator.Start(); err != nil {
-			return fmt.Errorf("failed to start Redis coordination: %w", err)
-		}
-		log.Info().Msg("Redis coordination started")
+	// Start rate limiters
+	if err := p.rateLimiter.Start(); err != nil {
+		return fmt.Errorf("failed to start rate limiters: %w", err)
 	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))

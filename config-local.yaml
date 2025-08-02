@@ -1,0 +1,11 @@
+default_bandwidth: 102400  # 100KB/s
+users:
+  alice: 5242880   # 5MB/s
+  bob: 2097152     # 2MB/s
+
+# Local rate limiting mode - each proxy enforces its own static limits
+rate_limit_mode: "local"
+
+# Redis not needed for local mode
+redis:
+  enabled: false

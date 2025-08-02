@@ -425,3 +425,12 @@ func (c *ClientMessageParser) extractUsernameFromJWT(jwtToken string) string {
 func (c *ClientMessageParser) GetUser() string {
 	return c.user
 }
+
+// Disconnect logs user disconnection for all connections
+func (c *ClientMessageParser) Disconnect() {
+	if c.user != "" {
+		log.Info().Str("user", c.user).Msg("User disconnected")
+	} else {
+		log.Info().Msg("Client disconnected")
+	}
+}
