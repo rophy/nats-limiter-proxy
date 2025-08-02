@@ -76,27 +76,38 @@ func (pm *PeerManager) kubernetesDiscovery() {
 	}
 }
 
-// discoverKubernetesPeers discovers peers in Kubernetes environment
+// discoverKubernetesPeers discovers peers in Kubernetes or Docker Compose environment
 func (pm *PeerManager) discoverKubernetesPeers() {
-	// Get service name and namespace from environment
-	serviceName := os.Getenv("K8S_SERVICE_NAME")
+	// Get service name from environment (works for both K8s and Docker Compose)
+	serviceName := os.Getenv("SERVICE_NAME")
+	if serviceName == "" {
+		// Legacy support for K8S_SERVICE_NAME
+		serviceName = os.Getenv("K8S_SERVICE_NAME")
+	}
 	if serviceName == "" {
 		serviceName = "nats-limiter-proxy"
 	}
 	
-	namespace := os.Getenv("K8S_NAMESPACE")
-	if namespace == "" {
-		namespace = "default"
-	}
-	
-	// Construct DNS name for headless service
-	dnsName := fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, namespace)
-	
-	// Resolve all IPs for the service
-	ips, err := net.LookupIP(dnsName)
+	// Try simple service name first (Docker Compose, K8s short name)
+	ips, err := net.LookupIP(serviceName)
 	if err != nil {
-		log.Error().Err(err).Str("dns_name", dnsName).Msg("Failed to resolve service DNS")
-		return
+		// If that fails, try with default namespace (Kubernetes fallback)
+		namespace := os.Getenv("K8S_NAMESPACE")
+		if namespace == "" {
+			namespace = "default"
+		}
+		kubernetesName := fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, namespace)
+		ips, err = net.LookupIP(kubernetesName)
+		if err != nil {
+			log.Error().Err(err).
+				Str("service_name", serviceName).
+				Str("kubernetes_name", kubernetesName).
+				Msg("Failed to resolve service DNS with both simple and FQDN")
+			return
+		}
+		log.Debug().Str("dns_name", kubernetesName).Msg("Resolved service using Kubernetes FQDN")
+	} else {
+		log.Debug().Str("dns_name", serviceName).Msg("Resolved service using simple name")
 	}
 	
 	myIP := pm.getMyIP()

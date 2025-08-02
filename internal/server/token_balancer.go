@@ -68,14 +68,24 @@ func (tb *TokenBalancer) GetOrCreateBucket(username string) *ratelimit.Bucket {
 	// Get user's global limit
 	globalLimit := tb.getUserGlobalLimit(username)
 	
-	// Start with equal allocation across all peers
-	peers := tb.coordinator.GetActivePeers()
-	peerCount := len(peers) + 1 // +1 for this peer
-	if peerCount == 0 {
-		peerCount = 1
+	// For distributed rate limiting, use demand-based allocation
+	// If this is the only proxy with this user, give full allocation
+	// If multiple proxies have this user, distribute based on actual usage
+	
+	var initialAllocation int64
+	
+	// Check if other peers are actually serving this user
+	activePeersForUser := tb.getActivePeersForUser(username)
+	if activePeersForUser <= 1 {
+		// This is the only proxy serving this user - give full allocation
+		initialAllocation = globalLimit
+	} else {
+		// Multiple proxies serving this user - start with fair share
+		// Rebalancing will adjust based on actual demand
+		initialAllocation = globalLimit / int64(activePeersForUser)
 	}
 	
-	initialAllocation := globalLimit / int64(peerCount)
+	// Ensure minimum allocation
 	if initialAllocation < tb.minAllocation {
 		initialAllocation = tb.minAllocation
 	}
@@ -416,4 +426,22 @@ func (tb *TokenBalancer) GetAllAllocations() map[string]map[string]int64 {
 	}
 	
 	return result
+}
+
+// getActivePeersForUser returns number of peers actively serving a user
+func (tb *TokenBalancer) getActivePeersForUser(username string) int {
+	// Check if we have usage data for this user from other peers
+	peerUsage := tb.coordinator.GetPeerUsage(username)
+	
+	activePeers := 1 // Count ourselves
+	
+	// Count peers that have recent usage for this user
+	now := time.Now()
+	for _, usage := range peerUsage {
+		if usage.Username == username && now.Sub(usage.LastUpdated) < 2*time.Minute {
+			activePeers++
+		}
+	}
+	
+	return activePeers
 }

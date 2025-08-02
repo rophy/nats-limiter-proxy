@@ -15,6 +15,7 @@ services:
     volumes:
       - ./local/nsc:/nsc
       - ./local/scripts:/scripts
+  
   proxy:
     image: nats-limiter-proxy
     build:
@@ -24,11 +25,17 @@ services:
       UPSTREAM_HOST: nats
       UPSTREAM_PORT: "4222"
       LOG_LEVEL: "debug"
-      
+      SERVICE_NAME: "proxy"  # Service name for peer discovery
+      # POD_IP: not needed - Docker Compose uses network route detection
     ports:
-      - "4223:4223"
+      - "4223-4225:4223"  # NATS proxy ports (range)
+      - "8081-8083:8081"  # Gossip communication ports (range)
     volumes:
-    - ./config.yaml:/app/config.yaml:ro
+      - ./config-distributed.yaml:/app/config.yaml:ro
+    depends_on:
+      - nats
+    deploy:
+      replicas: 3
 volumes:
   nats-jwt:
   nats-data:

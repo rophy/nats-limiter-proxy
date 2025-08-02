@@ -76,7 +76,7 @@ func LoadConfig(path string) (*Config, error) {
 
 // getMyIP returns the current instance's IP address
 func getMyIP() string {
-	// Try to get IP from environment first (Kubernetes sets this)
+	// Try to get IP from environment first (Kubernetes/Docker sets this)
 	if podIP := os.Getenv("POD_IP"); podIP != "" {
 		return podIP
 	}
