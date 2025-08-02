@@ -13,9 +13,10 @@ import (
 )
 
 type Config struct {
-	DefaultBandwidth int64                `yaml:"default_bandwidth"`
-	Users            map[string]int64     `yaml:"users"`
-	Coordination     *CoordinationConfig  `yaml:"coordination"`
+	DefaultBandwidth int64                     `yaml:"default_bandwidth"`
+	Users            map[string]int64          `yaml:"users"`
+	Coordination     *CoordinationConfig       `yaml:"coordination"`        // Legacy gossip config (deprecated)
+	Redis            *RedisCoordinationConfig  `yaml:"redis"`               // New Redis coordination config
 }
 
 type Proxy struct {
@@ -23,7 +24,8 @@ type Proxy struct {
 	upstreamPort     int
 	config           *Config
 	rateLimiterMgr   RateLimiterManagerInterface
-	peerCoordinator  *PeerCoordinator
+	peerCoordinator  *PeerCoordinator       // Legacy gossip coordinator
+	redisCoordinator *RedisCoordinator      // New Redis coordinator
 }
 
 type SwapReader struct {
@@ -71,6 +73,21 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 	
+	// Set default Redis coordination config if not specified
+	if cfg.Redis == nil {
+		cfg.Redis = &RedisCoordinationConfig{
+			Enabled:           false,
+			Sentinels:         []string{"redis-sentinel:26379"},
+			MasterName:        "mymaster",
+			Password:          "",
+			Database:          0,
+			SyncInterval:      5 * time.Second,
+			RebalanceInterval: 30 * time.Second,
+			CleanupInterval:   60 * time.Second,
+			StartupTimeout:    30 * time.Second,
+		}
+	}
+	
 	return &cfg, nil
 }
 
@@ -99,30 +116,31 @@ func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy,
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Initialize peer coordinator if coordination is enabled
-	var peerCoordinator *PeerCoordinator
 	var rateLimiterMgr RateLimiterManagerInterface
+	var redisCoordinator *RedisCoordinator
 	
-	if config.Coordination.Enabled {
+	// Redis coordination takes precedence over legacy gossip
+	if config.Redis.Enabled {
 		peerID := GeneratePeerID()
-		myAddress := fmt.Sprintf("%s:%d", getMyIP(), config.Coordination.Port)
-		peerCoordinator = NewPeerCoordinator(config.Coordination, peerID, myAddress)
+		redisCoordinator = NewRedisCoordinator(config.Redis, peerID)
+		redisCoordinator.SetConfig(config)
 		
-		// Use distributed rate limiter manager
-		distributedRLM := NewDistributedRateLimiterManager(config, peerCoordinator)
+		// Use distributed rate limiter manager with Redis coordinator
+		distributedRLM := NewDistributedRateLimiterManagerWithRedis(config, redisCoordinator)
 		distributedRLM.Start()
 		rateLimiterMgr = distributedRLM
 	} else {
-		// Use simple rate limiter manager
+		// Use simple rate limiter manager (no coordination)
 		rateLimiterMgr = NewRateLimiterManager(config)
+		log.Info().Msg("Running in standalone mode - no distributed coordination")
 	}
 
 	return &Proxy{
-		upstreamHost:    upstreamHost,
-		upstreamPort:    upstreamPort,
-		config:          config,
-		rateLimiterMgr:  rateLimiterMgr,
-		peerCoordinator: peerCoordinator,
+		upstreamHost:     upstreamHost,
+		upstreamPort:     upstreamPort,
+		config:           config,
+		rateLimiterMgr:   rateLimiterMgr,
+		redisCoordinator: redisCoordinator,
 	}, nil
 }
 
@@ -159,12 +177,12 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 }
 
 func (p *Proxy) Start(port int) error {
-	// Start peer coordination if enabled
-	if p.peerCoordinator != nil {
-		if err := p.peerCoordinator.Start(); err != nil {
-			return fmt.Errorf("failed to start peer coordination: %w", err)
+	// Start Redis coordination if enabled
+	if p.redisCoordinator != nil {
+		if err := p.redisCoordinator.Start(); err != nil {
+			return fmt.Errorf("failed to start Redis coordination: %w", err)
 		}
-		log.Info().Msg("Peer coordination started")
+		log.Info().Msg("Redis coordination started")
 	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))

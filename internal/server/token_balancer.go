@@ -9,10 +9,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Coordinator interface for both Redis and Gossip coordinators
+type Coordinator interface {
+	GetPeerUsage(username string) map[string]*UserUsage
+	GetActivePeers() []*Peer
+}
+
 // TokenBalancer manages distributed token allocation across peers
 type TokenBalancer struct {
-	coordinator   *PeerCoordinator
+	coordinator   Coordinator
 	config        *Config  // Rate limiting config
+	myPeerID      string
 	localBuckets  map[string]*ratelimit.Bucket
 	allocations   map[string]map[string]int64  // username -> peerID -> allocation
 	bucketsMutex  sync.RWMutex
@@ -27,7 +34,7 @@ type TokenBalancer struct {
 }
 
 // NewTokenBalancer creates a new token balancer
-func NewTokenBalancer(coordinator *PeerCoordinator) *TokenBalancer {
+func NewTokenBalancer(coordinator Coordinator) *TokenBalancer {
 	return &TokenBalancer{
 		coordinator:      coordinator,
 		localBuckets:     make(map[string]*ratelimit.Bucket),
@@ -38,6 +45,11 @@ func NewTokenBalancer(coordinator *PeerCoordinator) *TokenBalancer {
 		demandMultiplier: 1.2,     // 20% buffer for demand
 		burstRatio:       0.1,     // 10% burst capacity
 	}
+}
+
+// SetPeerID sets the peer ID for this token balancer
+func (tb *TokenBalancer) SetPeerID(peerID string) {
+	tb.myPeerID = peerID
 }
 
 // Start begins the token balancer
@@ -104,7 +116,7 @@ func (tb *TokenBalancer) GetOrCreateBucket(username string) *ratelimit.Bucket {
 	if tb.allocations[username] == nil {
 		tb.allocations[username] = make(map[string]int64)
 	}
-	tb.allocations[username][tb.coordinator.myPeerID] = initialAllocation
+	tb.allocations[username][tb.myPeerID] = initialAllocation
 	tb.allocMutex.Unlock()
 	
 	log.Info().
@@ -145,7 +157,7 @@ func (tb *TokenBalancer) UpdateUserAllocation(username string, newAllocation int
 	if tb.allocations[username] == nil {
 		tb.allocations[username] = make(map[string]int64)
 	}
-	tb.allocations[username][tb.coordinator.myPeerID] = newAllocation
+	tb.allocations[username][tb.myPeerID] = newAllocation
 	tb.allocMutex.Unlock()
 	
 	log.Info().
@@ -267,7 +279,7 @@ func (tb *TokenBalancer) applyGradualReallocation(username string, newAllocation
 	for peerID, newAllocation := range newAllocations {
 		currentAllocation := currentAllocations[peerID]
 		
-		if peerID == tb.coordinator.myPeerID {
+		if peerID == tb.myPeerID {
 			// Update local allocation
 			tb.updateLocalAllocationGradually(username, currentAllocation, newAllocation)
 		} else {
@@ -317,40 +329,15 @@ func (tb *TokenBalancer) updateLocalAllocationGradually(username string, current
 	tb.UpdateUserAllocation(username, newAllocation)
 }
 
-// sendAllocationUpdate sends allocation update to a peer
+// sendAllocationUpdate handles allocation updates for different coordinator types
 func (tb *TokenBalancer) sendAllocationUpdate(peerID, username string, allocation int64) {
-	// Find peer address
-	peers := tb.coordinator.GetActivePeers()
-	var peerAddress string
-	for _, peer := range peers {
-		if peer.ID == peerID {
-			peerAddress = peer.Address
-			break
-		}
-	}
-	
-	if peerAddress == "" {
-		log.Warn().Str("peer_id", peerID).Msg("Cannot find peer address for allocation update")
-		return
-	}
-	
-	allocation_update := AllocationUpdate{
-		FromPeer:  tb.coordinator.myPeerID,
-		ToPeer:    peerID,
-		Username:  username,
-		Allocation: allocation,
-		Timestamp: time.Now(),
-	}
-	
-	go func() {
-		if err := tb.coordinator.gossipService.SendAllocation(peerAddress, allocation_update); err != nil {
-			log.Error().
-				Str("peer_id", peerID).
-				Str("username", username).
-				Err(err).
-				Msg("Failed to send allocation update")
-		}
-	}()
+	// For Redis coordination, we don't send peer-to-peer allocation updates
+	// Instead, allocation changes are handled through Redis rebalancing
+	log.Debug().
+		Str("peer_id", peerID).
+		Str("username", username).
+		Int64("allocation", allocation).
+		Msg("Allocation update tracked locally - will sync via Redis rebalancing")
 }
 
 // getUsersToRebalance returns list of users that need rebalancing
@@ -364,22 +351,8 @@ func (tb *TokenBalancer) getUsersToRebalance() []string {
 	}
 	tb.bucketsMutex.RUnlock()
 	
-	// Get users from peer usage data
-	tb.coordinator.usageMutex.RLock()
-	for username := range tb.coordinator.userUsage {
-		// Check if already in list
-		found := false
-		for _, existingUser := range users {
-			if existingUser == username {
-				found = true
-				break
-			}
-		}
-		if !found {
-			users = append(users, username)
-		}
-	}
-	tb.coordinator.usageMutex.RUnlock()
+	// Get users from coordinator usage data
+	// Note: For Redis coordinator, this is handled differently
 	
 	return users
 }
@@ -403,7 +376,7 @@ func (tb *TokenBalancer) GetCurrentAllocation(username string) int64 {
 	defer tb.allocMutex.RUnlock()
 	
 	if userAllocations, exists := tb.allocations[username]; exists {
-		if allocation, exists := userAllocations[tb.coordinator.myPeerID]; exists {
+		if allocation, exists := userAllocations[tb.myPeerID]; exists {
 			return allocation
 		}
 	}

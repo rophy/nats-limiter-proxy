@@ -1,0 +1,16 @@
+default_bandwidth: 102400  # 100KB/s
+users:
+  alice: 5242880   # 5MB/s
+  bob: 2097152     # 2MB/s
+
+# Redis coordination settings for distributed rate limiting
+redis:
+  enabled: true                           # Enable Redis coordination
+  redis_sentinels: ["redis-sentinel:26379"]  # Redis Sentinel addresses
+  redis_master_name: "mymaster"          # Redis master name in Sentinel
+  redis_password: ""                     # Redis password (if required)
+  redis_database: 0                      # Redis database number
+  sync_interval: 5s                      # How often to sync usage to Redis
+  rebalance_interval: 30s                # How often to rebalance tokens
+  cleanup_interval: 60s                  # How often to cleanup old data
+  startup_timeout: 30s                   # How long to wait for Redis on startup

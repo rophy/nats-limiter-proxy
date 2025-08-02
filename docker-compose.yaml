@@ -16,6 +16,33 @@ services:
       - ./local/nsc:/nsc
       - ./local/scripts:/scripts
   
+  # Redis master for rate limiting
+  redis-master:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --replica-announce-ip redis-master
+    ports:
+      - "6379:6379"
+    
+  # Redis Sentinel for functional testing  
+  redis-sentinel:
+    image: redis:7-alpine
+    command: >
+      sh -c "
+        echo 'Waiting for Redis master to be ready...' &&
+        until redis-cli -h redis-master -p 6379 ping; do
+          echo 'Redis master not ready, waiting...'
+          sleep 2
+        done &&
+        echo 'Redis master is ready, starting Sentinel...' &&
+        redis-sentinel /etc/redis/sentinel.conf
+      "
+    ports:
+      - "26379:26379"
+    volumes:
+      - ./redis/sentinel.conf:/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+  
   proxy:
     image: nats-limiter-proxy
     build:
@@ -25,15 +52,14 @@ services:
       UPSTREAM_HOST: nats
       UPSTREAM_PORT: "4222"
       LOG_LEVEL: "debug"
-      SERVICE_NAME: "proxy"  # Service name for peer discovery
-      # POD_IP: not needed - Docker Compose uses network route detection
     ports:
       - "4223-4225:4223"  # NATS proxy ports (range)
-      - "8081-8083:8081"  # Gossip communication ports (range)
     volumes:
-      - ./config-distributed.yaml:/app/config.yaml:ro
+      - ./config-redis.yaml:/app/config.yaml:ro
     depends_on:
       - nats
+      - redis-master
+      - redis-sentinel
     deploy:
       replicas: 3
 volumes:

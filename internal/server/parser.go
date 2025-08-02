@@ -102,16 +102,24 @@ type RateLimiterManagerInterface interface {
 	GetLimiter(username string) *ratelimit.Bucket
 }
 
+// UsageReporter defines the interface for tracking usage statistics
+type UsageReporter interface {
+	TrackUsage(username string, bytesUsed int64)
+}
+
 // RateLimitedWriter wraps an io.Writer and applies rate limiting to all writes
 type RateLimitedWriter struct {
-	writer      io.Writer
-	rateLimiter *ratelimit.Bucket
+	writer             io.Writer
+	rateLimiter        *ratelimit.Bucket
+	rateLimiterManager RateLimiterManagerInterface
+	username           string
 }
 
 // NewRateLimitedWriter creates a new rate-limited writer
-func NewRateLimitedWriter(w io.Writer) *RateLimitedWriter {
+func NewRateLimitedWriter(w io.Writer, rateLimiterManager RateLimiterManagerInterface) *RateLimitedWriter {
 	return &RateLimitedWriter{
-		writer: w,
+		writer:             w,
+		rateLimiterManager: rateLimiterManager,
 	}
 }
 
@@ -121,12 +129,29 @@ func (rlw *RateLimitedWriter) Write(data []byte) (int, error) {
 		// Apply rate limiting for each byte
 		rlw.rateLimiter.Wait(int64(len(data)))
 	}
-	return rlw.writer.Write(data)
+	
+	// Write the data
+	n, err := rlw.writer.Write(data)
+	
+	// Track actual bytes written for coordination
+	if err == nil && n > 0 && rlw.rateLimiterManager != nil && rlw.username != "" {
+		// Check if the rate limiter manager supports usage tracking
+		if tracker, ok := rlw.rateLimiterManager.(UsageReporter); ok {
+			tracker.TrackUsage(rlw.username, int64(n))
+		}
+	}
+	
+	return n, err
 }
 
 // UpdateRateLimiter updates the rate limiter (e.g., when user changes)
 func (rlw *RateLimitedWriter) UpdateRateLimiter(rateLimiter *ratelimit.Bucket) {
 	rlw.rateLimiter = rateLimiter
+}
+
+// UpdateUser updates the username for usage tracking
+func (rlw *RateLimitedWriter) UpdateUser(username string) {
+	rlw.username = username
 }
 
 // ClientMessageParser parses and forwards NATS protocol data efficiently for proxying.
@@ -155,7 +180,7 @@ func NewClientMessageParser(
 ) *ClientMessageParser {
 	return &ClientMessageParser{
 		clientReader:       bufio.NewReader(clientReader),
-		serverWriter:       NewRateLimitedWriter(serverWriter),
+		serverWriter:       NewRateLimitedWriter(serverWriter, rateLimiterManager),
 		state:              OP_START,
 		rateLimiterManager: rateLimiterManager,
 		bufferPos:          0, // Start with empty buffer
@@ -365,6 +390,7 @@ func (c *ClientMessageParser) processUser(user string) {
 	if c.rateLimiterManager != nil {
 		rateLimiter := c.rateLimiterManager.GetLimiter(user)
 		c.serverWriter.UpdateRateLimiter(rateLimiter)
+		c.serverWriter.UpdateUser(user)
 	}
 
 }

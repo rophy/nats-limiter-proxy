@@ -50,7 +50,7 @@ docker-down:
 
 # Run tests
 test: docker-up
-	docker compose exec nats-box nats --context=alice bench pub test --size=1024 --msgs=100000
+	docker compose exec nats-box nats --context=alice bench pub test --size=1024 --msgs=100000 --no-progress
 
 # Test distributed rate limiting with 3 proxy nodes
 test-distributed: docker-up
