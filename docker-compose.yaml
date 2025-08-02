@@ -40,7 +40,7 @@ services:
     ports:
       - "26379:26379"
     volumes:
-      - ./redis/sentinel.conf:/etc/redis/sentinel.conf
+      - ./local/sentinel.conf:/etc/redis/sentinel.conf
     depends_on:
       - redis-master
   

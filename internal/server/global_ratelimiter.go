@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"sync"
 	"time"
@@ -10,6 +11,26 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
+
+// RedisCoordinationConfig holds Redis coordination settings
+type RedisCoordinationConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	Sentinels         []string      `yaml:"redis_sentinels"`
+	MasterName        string        `yaml:"redis_master_name"`
+	Password          string        `yaml:"redis_password"`
+	Database          int           `yaml:"redis_database"`
+	SyncInterval      time.Duration `yaml:"sync_interval"`
+	RebalanceInterval time.Duration `yaml:"rebalance_interval"`
+	CleanupInterval   time.Duration `yaml:"cleanup_interval"`
+	StartupTimeout    time.Duration `yaml:"startup_timeout"`
+}
+
+// GeneratePeerID generates a unique peer identifier
+func GeneratePeerID() string {
+	bytes := make([]byte, 6)
+	rand.Read(bytes)
+	return fmt.Sprintf("%x", bytes)
+}
 
 // GlobalRateLimiter manages dynamic global rate limiting with Redis coordination
 type GlobalRateLimiter struct {
@@ -103,12 +124,12 @@ func (grl *GlobalRateLimiter) GetGlobalBucket(username string) *ratelimit.Bucket
 		return bucket
 	}
 
-	// Get user's configured rate limit (same as local initially)
+	// Get user's configured global rate limit
 	var rateLimit int64
-	if userLimit, exists := grl.config.Users[username]; exists {
-		rateLimit = userLimit
+	if userBW, exists := grl.config.Bandwidth.Users[username]; exists {
+		rateLimit = userBW.Global
 	} else {
-		rateLimit = grl.config.DefaultBandwidth
+		rateLimit = grl.config.Bandwidth.DefaultGlobal
 	}
 
 	// Create global bucket with same initial rate as local (will be rebalanced)
@@ -341,12 +362,12 @@ func (grl *GlobalRateLimiter) rebalanceGlobalQuotas() {
 
 // rebalanceUserQuota rebalances quota for a specific user
 func (grl *GlobalRateLimiter) rebalanceUserQuota(ctx context.Context, username string) {
-	// Get user's total configured quota
+	// Get user's total configured global quota
 	var totalQuota int64
-	if userLimit, exists := grl.config.Users[username]; exists {
-		totalQuota = userLimit
+	if userBW, exists := grl.config.Bandwidth.Users[username]; exists {
+		totalQuota = userBW.Global
 	} else {
-		totalQuota = grl.config.DefaultBandwidth
+		totalQuota = grl.config.Bandwidth.DefaultGlobal
 	}
 
 	// Get number of connected proxies for this user

@@ -4,16 +4,16 @@ A NATS server proxy that adds per-user bandwidth limiting functionality with dis
 
 ## Features
 
-- **Per-User Rate Limiting**: Configure bandwidth limits per user (bytes/second)
-- **Protocol-Aware**: Deep packet inspection of NATS CONNECT messages
+- **Dual Rate Limiting**: Separate local (per-instance) and global (total) bandwidth limits
+- **Protocol-Aware**: Deep packet inspection of NATS CONNECT messages  
 - **Authentication Support**: Username/password and JWT token extraction
-- **Distributed Coordination**: Optional peer-to-peer coordination for multi-instance deployments
+- **Redis Coordination**: Distributed rate limiting with Redis Sentinel for multi-instance deployments
 - **Docker Compose Ready**: Easy development with 3-replica setup
-- **Zero External Dependencies**: Self-contained with optional distributed features
+- **Backward Compatibility**: Legacy configuration format automatically migrated
 
 ## Quick Start
 
-### Single Instance (Development)
+### Local Mode (Single Instance)
 ```bash
 # Initialize NATS accounts and start services
 make init
@@ -26,91 +26,142 @@ make test
 make help
 ```
 
-### Distributed Mode (3 Replicas)
+### Global Mode (Distributed with Redis)
 ```bash
-# Start 3 proxy replicas with peer coordination
-make docker-up  # Uses config-distributed.yaml by default
+# Start 3 proxy replicas with Redis coordination
+make docker-up  # Uses config-redis.yaml by default
 
-# Test across multiple proxies
+# Test distributed rate limiting
 make test-distributed
 
-# Monitor peer coordination
-curl http://localhost:8081/peers  # Proxy 1
-curl http://localhost:8082/peers  # Proxy 2  
-curl http://localhost:8083/peers  # Proxy 3
+# Monitor Redis coordination
+docker compose logs proxy | grep -E "(rebalance|global)"
 ```
 
 ## Configuration
 
-### Basic Rate Limiting (`config.yaml`)
+### Enhanced Bandwidth Configuration
+The new configuration format supports separate local and global bandwidth limits:
+
 ```yaml
-default_bandwidth: 102400  # 100KB/s default
-users:
-  alice: 5242880   # 5MB/s
-  bob: 2097152     # 2MB/s
+bandwidth:
+  default_local: 102400   # 100KB/s per proxy instance
+  default_global: 204800  # 200KB/s total across all proxies
+  users:
+    alice:
+      local: 5242880      # 5MB/s per proxy instance
+      global: 15728640    # 15MB/s total across all proxies  
+    bob:
+      local: 2097152      # 2MB/s per proxy instance
+      # global defaults to local value (2MB/s)
 ```
 
-### Distributed Coordination (`config-distributed.yaml`)
+### Local Mode (`config-local.yaml`)
 ```yaml
-default_bandwidth: 102400
+bandwidth:
+  default_local: 102400
+  users:
+    alice:
+      local: 5242880
+    bob:
+      local: 2097152
+
+redis:
+  enabled: false  # Local rate limiting only
+```
+
+### Global Mode (`config-redis.yaml`)
+```yaml
+bandwidth:
+  default_local: 102400   # Per-instance limits
+  default_global: 204800  # Total limits across all proxies
+  users:
+    alice:
+      local: 5242880
+      global: 15728640    # 3x local for distributed usage
+    bob:
+      local: 2097152
+
+redis:
+  enabled: true                           # Enable global coordination
+  redis_sentinels: ["redis-sentinel:26379"]
+  redis_master_name: "mymaster"
+  redis_password: ""
+  redis_database: 0
+  sync_interval: 5s
+  rebalance_interval: 30s
+  cleanup_interval: 60s
+  startup_timeout: 30s
+```
+
+### Legacy Format (Backward Compatible)
+```yaml
+default_bandwidth: 102400  # Automatically migrated
 users:
   alice: 5242880
   bob: 2097152
-
-# Peer coordination for distributed rate limiting
-coordination:
-  enabled: true                     # Enable distributed coordination
-  port: 8081                       # HTTP port for peer communication
-  gossip_interval: 5s              # How often to send usage gossip
-  rebalance_interval: 30s          # How often to rebalance tokens
-  cleanup_interval: 60s            # How often to cleanup old data
-  discovery_method: kubernetes     # kubernetes, static, or dns
 ```
 
 ## Architecture
 
-### Single Instance Mode
+### Local Mode (Single Instance)
 ```
 NATS Client → Proxy (4223) → NATS Server (4222)
               ↓
-          Rate Limiter
+        Local Rate Limiter
+        (Static per-instance limits)
 ```
 
-### Distributed Mode  
+### Global Mode (Redis Coordination)
 ```
 NATS Client A → Proxy 1 (4223) ──┐
 NATS Client B → Proxy 2 (4224) ──┼── NATS Server (4222)
 NATS Client C → Proxy 3 (4225) ──┘
                 ↓     ↓     ↓
-           Gossip Protocol (8081-8083)
-           Coordinates rate limits across proxies
+    Local + Global Rate Limiters
+                ↓     ↓     ↓
+         Redis Sentinel Cluster
+    (Coordinates global quotas with 1s sync, 5s rebalancing)
 ```
 
 ## Rate Limiting Behavior
 
-### Single User, Single Proxy
-- User gets their full configured bandwidth limit
-- Example: Alice gets 5MB/s when connecting to any proxy
+### Dual Rate Limiting System
+Both local and global rate limiters apply simultaneously - the stricter limit wins:
 
-### Single User, Multiple Proxies  
-- Rate limit enforced globally across all proxy instances
-- Example: Alice gets total 5MB/s distributed across connections
+- **Local Rate Limiter**: Static per-proxy-instance enforcement
+- **Global Rate Limiter**: Dynamic total-across-all-proxies enforcement (requires Redis)
 
-### Multiple Users, Multiple Proxies
-- Each user's limit enforced independently
-- Dynamic token rebalancing based on actual usage patterns
+### Local Mode Examples
+- **Alice → Proxy 1**: Gets 5MB/s (alice.local)
+- **Alice → Proxy 2**: Gets 5MB/s (alice.local) 
+- **Total Alice usage**: Up to 10MB/s across both proxies
+
+### Global Mode Examples  
+- **Alice → Proxy 1**: Gets min(5MB/s local, 15MB/s global ÷ proxy_count)
+- **Alice → Proxy 2**: Gets min(5MB/s local, 15MB/s global ÷ proxy_count)
+- **Total Alice usage**: Maximum 15MB/s globally, rebalanced every 5 seconds
+
+### Rebalancing Logic
+- **Even distribution**: Global quota split evenly across active proxies
+- **Real-time updates**: Dynamic bucket adjustment based on proxy count
+- **Connection tracking**: Quotas released when users disconnect
 
 ## Deployment Options
 
 ### Docker Compose (Development)
 ```yaml
-# Uses replica scaling and service discovery
+# 3 proxy replicas with Redis Sentinel coordination
 services:
   proxy:
     deploy:
       replicas: 3
-    environment:
-      SERVICE_NAME: "proxy"
+    volumes:
+      - ./config-redis.yaml:/app/config.yaml:ro
+    depends_on:
+      - nats
+      - redis-master
+      - redis-sentinel
 ```
 
 ### Kubernetes (Production)
@@ -126,40 +177,55 @@ spec:
       containers:
       - name: proxy
         env:
-        - name: POD_IP
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP
-        - name: SERVICE_NAME
-          value: "nats-limiter-proxy"
+        - name: UPSTREAM_HOST
+          value: "nats-server"
+        - name: UPSTREAM_PORT
+          value: "4222"
+        volumeMounts:
+        - name: config
+          mountPath: /app/config.yaml
+          subPath: config-redis.yaml
 ```
 
-### Static Deployment
+### Single Instance (Local Mode)
 ```bash
-# Environment variables for peer discovery
-export SERVICE_NAME="nats-proxy"
-export STATIC_PEERS="10.0.1.10:8081,10.0.1.11:8081,10.0.1.12:8081"
-./nats-limiter-proxy
+# No Redis required for local-only rate limiting
+UPSTREAM_HOST=nats-server UPSTREAM_PORT=4222 ./nats-limiter-proxy
 ```
 
 ## Monitoring
 
-### Health Checks
+### Rate Limiting Logs
 ```bash
-curl http://localhost:8081/health
-curl http://localhost:8082/health
-curl http://localhost:8083/health
+# Monitor local rate limiter creation
+docker compose logs proxy | grep "Created local rate limiter"
+
+# Monitor global coordination
+docker compose logs proxy | grep -E "(global|rebalance|Redis)"
+
+# Monitor user connections
+docker compose logs proxy | grep -E "(authenticated|disconnected|connection.*added|connection.*removed)"
 ```
 
-### Peer Status
+### Redis Coordination Status
 ```bash
-curl http://localhost:8081/peers | jq '.'
+# Check Redis connectivity
+docker compose exec redis-master redis-cli ping
+
+# Monitor Redis keys (user tracking)
+docker compose exec redis-master redis-cli --scan --pattern "user:*"
+
+# View proxy coordination data
+docker compose exec redis-master redis-cli keys "user:alice:*"
 ```
 
-### Usage Statistics
+### Performance Testing
 ```bash
-# View distributed rate limiting in action
-docker compose logs proxy | grep -E "(allocation|gossip|rebalance)"
+# Test local rate limiting (single proxy)
+nats --server=localhost:4223 --user=alice --password=alicepass bench pub test --size=1024 --msgs=100000
+
+# Test global rate limiting (multiple connections)
+nats --server=localhost:4223 --user=alice --password=alicepass bench pub test --size=1024 --msgs=100000 --clients=3
 ```
 
 ## Port Configuration
@@ -170,9 +236,8 @@ docker compose logs proxy | grep -E "(allocation|gossip|rebalance)"
 | Proxy 1 | 4223 | NATS client connections |
 | Proxy 2 | 4224 | NATS client connections |  
 | Proxy 3 | 4225 | NATS client connections |
-| Gossip 1 | 8081 | Peer coordination |
-| Gossip 2 | 8082 | Peer coordination |
-| Gossip 3 | 8083 | Peer coordination |
+| Redis Master | 6379 | Redis coordination backend |
+| Redis Sentinel | 26379 | Redis Sentinel for failover |
 
 ## Development
 
@@ -192,19 +257,20 @@ make clean          # Clean build artifacts
 
 ### Testing
 ```bash
-# Basic functionality
+# Local rate limiting (single proxy)
 make test
 
-# Distributed coordination
+# Global rate limiting (3 proxy replicas with Redis)
 make test-distributed
 
-# Manual rate limiting verification
+# Manual verification
 ./manual_test.sh
 ```
 
 ## Dependencies
 
 - `github.com/juju/ratelimit`: Token bucket rate limiting algorithm
+- `github.com/redis/go-redis/v9`: Redis client for coordination
 - `github.com/rs/zerolog`: Structured logging
 - `gopkg.in/yaml.v3`: YAML configuration parsing
 - `github.com/golang-jwt/jwt/v5`: JWT token parsing

@@ -12,21 +12,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type BandwidthConfig struct {
+	DefaultLocal  int64                     `yaml:"default_local"`
+	DefaultGlobal int64                     `yaml:"default_global"`
+	Users         map[string]*UserBandwidth `yaml:"users"`
+}
+
+type UserBandwidth struct {
+	Local  int64 `yaml:"local"`
+	Global int64 `yaml:"global,omitempty"` // Optional, defaults to Local if not specified
+}
+
 type Config struct {
-	DefaultBandwidth int64                     `yaml:"default_bandwidth"`
-	Users            map[string]int64          `yaml:"users"`
-	RateLimitMode    string                    `yaml:"rate_limit_mode"`     // "local" or "global" 
-	Coordination     *CoordinationConfig       `yaml:"coordination"`        // Legacy gossip config (deprecated)
-	Redis            *RedisCoordinationConfig  `yaml:"redis"`               // Redis config for global mode
+	Bandwidth *BandwidthConfig         `yaml:"bandwidth"`
+	Redis     *RedisCoordinationConfig `yaml:"redis"` // Redis config for global mode
+	
+	// Legacy fields for backward compatibility
+	DefaultBandwidth int64            `yaml:"default_bandwidth,omitempty"`
+	Users            map[string]int64 `yaml:"users,omitempty"`
 }
 
 type Proxy struct {
-	upstreamHost      string
-	upstreamPort      int
-	config            *Config
-	rateLimiter       *CombinedRateLimiter   // Combined local + global rate limiting
-	peerCoordinator   *PeerCoordinator       // Legacy gossip coordinator (deprecated)
-	redisCoordinator  *RedisCoordinator      // Legacy Redis coordinator (deprecated)
+	upstreamHost string
+	upstreamPort int
+	config       *Config
+	rateLimiter  *CombinedRateLimiter // Combined local + global rate limiting
 }
 
 type SwapReader struct {
@@ -58,20 +68,9 @@ func LoadConfig(path string) (*Config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	if cfg.DefaultBandwidth == 0 {
-		cfg.DefaultBandwidth = 10 * 1024 * 1024 // 10MB/s
-	}
-	
-	// Set default coordination config if not specified
-	if cfg.Coordination == nil {
-		cfg.Coordination = &CoordinationConfig{
-			Enabled:           false,
-			Port:              8081,
-			GossipInterval:    5 * time.Second,
-			RebalanceInterval: 30 * time.Second,
-			CleanupInterval:   60 * time.Second,
-			DiscoveryMethod:   "kubernetes",
-		}
+	// Handle backward compatibility and set defaults
+	if err := cfg.normalizeBandwidthConfig(); err != nil {
+		return nil, fmt.Errorf("invalid bandwidth configuration: %w", err)
 	}
 	
 	// Set default Redis coordination config if not specified
@@ -90,6 +89,51 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	
 	return &cfg, nil
+}
+
+// normalizeBandwidthConfig handles backward compatibility and sets defaults
+func (cfg *Config) normalizeBandwidthConfig() error {
+	// If using new bandwidth structure, validate and set defaults
+	if cfg.Bandwidth != nil {
+		// Set default values if not specified
+		if cfg.Bandwidth.DefaultLocal == 0 {
+			cfg.Bandwidth.DefaultLocal = 10 * 1024 * 1024 // 10MB/s
+		}
+		if cfg.Bandwidth.DefaultGlobal == 0 {
+			cfg.Bandwidth.DefaultGlobal = cfg.Bandwidth.DefaultLocal // Default global = local
+		}
+		
+		// Ensure user global defaults to local if not specified
+		for _, userBW := range cfg.Bandwidth.Users {
+			if userBW.Global == 0 {
+				userBW.Global = userBW.Local
+			}
+		}
+		return nil
+	}
+	
+	// Handle legacy configuration format
+	if cfg.DefaultBandwidth == 0 {
+		cfg.DefaultBandwidth = 10 * 1024 * 1024 // 10MB/s
+	}
+	
+	// Migrate legacy format to new structure
+	cfg.Bandwidth = &BandwidthConfig{
+		DefaultLocal:  cfg.DefaultBandwidth,
+		DefaultGlobal: cfg.DefaultBandwidth,
+		Users:         make(map[string]*UserBandwidth),
+	}
+	
+	// Migrate legacy user settings
+	for username, bandwidth := range cfg.Users {
+		cfg.Bandwidth.Users[username] = &UserBandwidth{
+			Local:  bandwidth,
+			Global: bandwidth, // Default global = local for legacy configs
+		}
+	}
+	
+	log.Info().Msg("Migrated legacy bandwidth configuration to new format")
+	return nil
 }
 
 // getMyIP returns the current instance's IP address
@@ -117,22 +161,13 @@ func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy,
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Set default rate limit mode if not specified
-	if config.RateLimitMode == "" {
-		config.RateLimitMode = "local" // Default to local mode
-	}
-
 	// Always create local rate limiter (for enforcement)
 	localRateLimiter := NewLocalRateLimiter(config)
 
 	var globalRateLimiter *GlobalRateLimiter
 	
-	// Create global rate limiter if in global mode
-	if config.RateLimitMode == "global" {
-		if !config.Redis.Enabled {
-			return nil, fmt.Errorf("global rate limiting requires Redis to be enabled")
-		}
-		
+	// Create global rate limiter if Redis is enabled
+	if config.Redis.Enabled {
 		peerID := GeneratePeerID()
 		globalRateLimiter, err = NewGlobalRateLimiter(config, peerID)
 		if err != nil {
@@ -156,12 +191,12 @@ func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy,
 }
 
 func (p *Proxy) getBandwidthForUser(user string) int64 {
-	if user != "" && p.config.Users != nil {
-		if bw, ok := p.config.Users[user]; ok {
-			return bw
+	if user != "" && p.config.Bandwidth.Users != nil {
+		if userBW, ok := p.config.Bandwidth.Users[user]; ok {
+			return userBW.Local // Proxy uses local bandwidth for legacy compatibility
 		}
 	}
-	return p.config.DefaultBandwidth
+	return p.config.Bandwidth.DefaultLocal
 }
 
 func (p *Proxy) HandleConnection(clientConn net.Conn) {

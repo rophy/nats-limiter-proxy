@@ -40,12 +40,12 @@ func (lrl *LocalRateLimiter) GetLimiter(username string) *ratelimit.Bucket {
 		return bucket
 	}
 
-	// Get user's rate limit from config
+	// Get user's local rate limit from config
 	var rateLimit int64
-	if userLimit, exists := lrl.config.Users[username]; exists {
-		rateLimit = userLimit
+	if userBW, exists := lrl.config.Bandwidth.Users[username]; exists {
+		rateLimit = userBW.Local
 	} else {
-		rateLimit = lrl.config.DefaultBandwidth
+		rateLimit = lrl.config.Bandwidth.DefaultLocal
 	}
 
 	// Create bucket with 1:1 burst ratio (rate == capacity)

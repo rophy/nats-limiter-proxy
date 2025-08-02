@@ -1,12 +1,15 @@
-default_bandwidth: 102400  # 100KB/s
-users:
-  alice: 5242880   # 5MB/s
-  bob: 2097152     # 2MB/s
+bandwidth:
+  default_local: 102400   # 100KB/s per proxy instance
+  default_global: 204800  # 200KB/s total across all proxies
+  users:
+    alice:
+      local: 5242880      # 5MB/s per proxy instance
+      global: 15728640    # 15MB/s total across all proxies
+    bob:
+      local: 2097152      # 2MB/s per proxy instance
+      # global defaults to local value (2MB/s)
 
-# Global rate limiting mode - local enforcement + global usage aggregation
-rate_limit_mode: "global"
-
-# Redis coordination settings for global usage tracking
+# Redis coordination settings for global rate limiting
 redis:
   enabled: true                           # Enable Redis coordination
   redis_sentinels: ["redis-sentinel:26379"]  # Redis Sentinel addresses
