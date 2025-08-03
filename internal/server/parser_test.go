@@ -78,6 +78,7 @@ func TestClientMessageParser_ParseAndForward(t *testing.T) {
 				input,
 				&output,
 				mockRLM,
+				&mockMetricsCollector{},
 			)
 
 			err := parser.ParseAndForward()
@@ -107,6 +108,7 @@ func TestClientMessageParser_MultipleMessages(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	err := parser.ParseAndForward()
@@ -148,6 +150,7 @@ func TestClientMessageParser_BufferDuplicationIssue(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	err := parser.ParseAndForward()
@@ -214,6 +217,7 @@ func TestClientMessageParser_RateLimitingOnBufferFlushes(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	start := time.Now()
@@ -242,7 +246,7 @@ func TestClientMessageParser_ExtractUsernameFromJWT(t *testing.T) {
 	// Create a dummy parser just to test the JWT extraction method
 	input := strings.NewReader("")
 	output := &bytes.Buffer{}
-	parser := NewClientMessageParser(input, output, nil)
+	parser := NewClientMessageParser(input, output, nil, &mockMetricsCollector{})
 
 	tests := []struct {
 		name     string
@@ -304,6 +308,7 @@ func TestClientMessageParser_RateLimitingIntegration(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	// Measure the rate limiting delay
@@ -344,6 +349,18 @@ func (m *mockRateLimiterManager) GetLocalLimiter(username string) *ratelimit.Buc
 	return m.GetLimiter(username)
 }
 
+// Mock MetricsCollector for testing
+type mockMetricsCollector struct{}
+
+func (m *mockMetricsCollector) RecordBytesReceived(user string, bytes int64) {}
+func (m *mockMetricsCollector) RecordBytesSent(user string, bytes int64)     {}
+func (m *mockMetricsCollector) RecordMessageReceived(user string)           {}
+func (m *mockMetricsCollector) RecordMessageSent(user string)               {}
+func (m *mockMetricsCollector) RecordConnection(user string)                {}
+func (m *mockMetricsCollector) RecordDisconnection(user string)             {}
+func (m *mockMetricsCollector) RecordAuthentication(user string)            {}
+func (m *mockMetricsCollector) RecordAuthFailure(user string)               {}
+
 func TestClientMessageParser_LargePayload(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -380,6 +397,7 @@ func TestClientMessageParser_LargePayload(t *testing.T) {
 				input,
 				&output,
 				mockRLM,
+				&mockMetricsCollector{},
 			)
 
 			err := parser.ParseAndForward()
@@ -418,6 +436,7 @@ func TestClientMessageParser_LargeHPUBPayload(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	err := parser.ParseAndForward()
@@ -457,6 +476,7 @@ func TestClientMessageParser_MultipleLargeMessages(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	err := parser.ParseAndForward()
@@ -499,6 +519,7 @@ func TestClientMessageParser_BufferGrowthAndReuse(t *testing.T) {
 				input,
 				&output,
 				mockRLM,
+				&mockMetricsCollector{},
 			)
 
 			err := parser.ParseAndForward()
@@ -528,6 +549,7 @@ func TestClientMessageParser_PartialReadScenarios(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	err := parser.ParseAndForward()
@@ -559,6 +581,7 @@ func TestClientMessageParser_ExtremelyLargePayload(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	err := parser.ParseAndForward()
@@ -603,6 +626,7 @@ func TestClientMessageParser_RateLimitingWithLargeMessages(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	start := time.Now()
@@ -656,6 +680,7 @@ func TestClientMessageParser_RateLimitingAccuracy(t *testing.T) {
 		input,
 		&output,
 		mockRLM,
+		&mockMetricsCollector{},
 	)
 
 	start := time.Now()

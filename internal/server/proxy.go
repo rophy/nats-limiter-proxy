@@ -32,11 +32,24 @@ type Config struct {
 	Users            map[string]int64 `yaml:"users,omitempty"`
 }
 
+// MetricsCollector interface for collecting proxy metrics
+type MetricsCollector interface {
+	RecordBytesReceived(user string, bytes int64)
+	RecordBytesSent(user string, bytes int64)
+	RecordMessageReceived(user string)
+	RecordMessageSent(user string)
+	RecordConnection(user string)
+	RecordDisconnection(user string)
+	RecordAuthentication(user string)
+	RecordAuthFailure(user string)
+}
+
 type Proxy struct {
 	upstreamHost string
 	upstreamPort int
 	config       *Config
 	rateLimiter  *CombinedRateLimiter // Combined local + global rate limiting
+	metrics      MetricsCollector     // Metrics collector
 }
 
 type SwapReader struct {
@@ -155,7 +168,7 @@ func getMyIP() string {
 	return localAddr.IP.String()
 }
 
-func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy, error) {
+func NewProxy(upstreamHost string, upstreamPort int, configPath string, metrics MetricsCollector) (*Proxy, error) {
 	config, err := LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
@@ -187,6 +200,7 @@ func NewProxy(upstreamHost string, upstreamPort int, configPath string) (*Proxy,
 		upstreamPort: upstreamPort,
 		config:       config,
 		rateLimiter:  rateLimiter,
+		metrics:      metrics,
 	}, nil
 }
 
@@ -202,27 +216,59 @@ func (p *Proxy) getBandwidthForUser(user string) int64 {
 func (p *Proxy) HandleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
+	// Record new connection (initially unauthenticated)
+	p.metrics.RecordConnection("")
+
 	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", p.upstreamHost, p.upstreamPort))
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to upstream")
+		p.metrics.RecordDisconnection("")
 		return
 	}
 	defer upstreamConn.Close()
 
-	// Create parser for tracking connection state
+	// Create parser for tracking connection state (client -> upstream)
 	parser := NewClientMessageParser(
 		clientConn,
 		upstreamConn,
 		p.rateLimiter,
+		p.metrics,
 	)
 
-	// Client -> Upstream
+	// Client -> Upstream (with parsing and rate limiting)
 	go func() {
-		defer parser.Disconnect()
+		defer func() {
+			parser.Disconnect()
+			// Record disconnection when parser finishes
+			user := parser.GetAuthenticatedUser()
+			p.metrics.RecordDisconnection(user)
+		}()
 		parser.ParseAndForward()
 	}()
 
-	io.Copy(clientConn, upstreamConn)
+	// Upstream -> Client (with metrics but no rate limiting on responses)
+	p.copyWithMetrics(clientConn, upstreamConn, parser)
+}
+
+// copyWithMetrics copies data from src to dst while recording bytes_sent metrics
+func (p *Proxy) copyWithMetrics(dst, src net.Conn, parser *ClientMessageParser) {
+	buffer := make([]byte, 32*1024) // 32KB buffer
+	for {
+		n, err := src.Read(buffer)
+		if n > 0 {
+			// Record bytes sent TO client (proxy -> client)
+			user := parser.GetAuthenticatedUser()
+			p.metrics.RecordBytesSent(user, int64(n))
+			
+			_, writeErr := dst.Write(buffer[:n])
+			if writeErr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (p *Proxy) Start(port int) error {

@@ -7,10 +7,12 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"nats-limiter-proxy/internal/server"
+	"nats-limiter-proxy/internal/metrics"
 )
 
 const (
-	localPort = 4223
+	localPort   = 4223
+	metricsPort = "8222"
 )
 
 func main() {
@@ -37,7 +39,13 @@ func main() {
 		log.Fatal().Str("port", portStr).Msg("Invalid UPSTREAM_PORT value")
 	}
 
-	proxy, err := server.NewProxy(upstreamHost, upstreamPort, "config.yaml")
+	// Initialize metrics
+	metricsCollector := metrics.New()
+	if err := metricsCollector.StartServer(metricsPort); err != nil {
+		log.Fatal().Err(err).Msg("Failed to start metrics server")
+	}
+
+	proxy, err := server.NewProxy(upstreamHost, upstreamPort, "config.yaml", metricsCollector)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create proxy")
 	}

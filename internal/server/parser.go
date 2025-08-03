@@ -114,13 +114,15 @@ type RateLimitedWriter struct {
 	localRateLimiter   *ratelimit.Bucket  // Static local rate limiter
 	rateLimiterManager RateLimiterManagerInterface
 	username           string
+	metrics            MetricsCollector
 }
 
 // NewRateLimitedWriter creates a new rate-limited writer
-func NewRateLimitedWriter(w io.Writer, rateLimiterManager RateLimiterManagerInterface) *RateLimitedWriter {
+func NewRateLimitedWriter(w io.Writer, rateLimiterManager RateLimiterManagerInterface, metrics MetricsCollector) *RateLimitedWriter {
 	return &RateLimitedWriter{
 		writer:             w,
 		rateLimiterManager: rateLimiterManager,
+		metrics:            metrics,
 	}
 }
 
@@ -151,6 +153,8 @@ func (rlw *RateLimitedWriter) Write(data []byte) (int, error) {
 		}
 	}
 	
+	// Note: bytes_sent metrics are now recorded in copyWithMetrics for upstream->client flow
+	
 	return n, err
 }
 
@@ -173,6 +177,7 @@ type ClientMessageParser struct {
 	as                 int
 	drop               int
 	rateLimiterManager RateLimiterManagerInterface
+	metrics            MetricsCollector
 
 	user string
 
@@ -187,12 +192,14 @@ func NewClientMessageParser(
 	clientReader io.Reader,
 	serverWriter io.Writer,
 	rateLimiterManager RateLimiterManagerInterface,
+	metrics MetricsCollector,
 ) *ClientMessageParser {
 	return &ClientMessageParser{
 		clientReader:       bufio.NewReader(clientReader),
-		serverWriter:       NewRateLimitedWriter(serverWriter, rateLimiterManager),
+		serverWriter:       NewRateLimitedWriter(serverWriter, rateLimiterManager, metrics),
 		state:              OP_START,
 		rateLimiterManager: rateLimiterManager,
+		metrics:            metrics,
 		bufferPos:          0, // Start with empty buffer
 	}
 }
@@ -215,6 +222,11 @@ func (c *ClientMessageParser) ParseAndForward() error {
 				return nil
 			}
 			return err
+		}
+
+		// Record bytes received FROM client (client->proxy requests)
+		if c.metrics != nil {
+			c.metrics.RecordBytesReceived(c.user, 1)
 		}
 
 		// Add byte to buffer
@@ -267,6 +279,10 @@ func (c *ClientMessageParser) ParseAndForward() error {
 			switch b {
 			case ' ', '\t':
 				c.state = OP_IGNORE
+				// Record message received (HPUB command)
+				if c.metrics != nil {
+					c.metrics.RecordMessageReceived(c.user)
+				}
 			default:
 				c.state = OP_IGNORE
 			}
@@ -288,6 +304,10 @@ func (c *ClientMessageParser) ParseAndForward() error {
 			switch b {
 			case ' ', '\t':
 				c.state = OP_IGNORE
+				// Record message received (PUB command)
+				if c.metrics != nil {
+					c.metrics.RecordMessageReceived(c.user)
+				}
 			default:
 				c.state = OP_IGNORE
 			}
@@ -393,10 +413,19 @@ func (c *ClientMessageParser) ParseAndForward() error {
 func (c *ClientMessageParser) processUser(user string) {
 	if c.user != "" {
 		log.Warn().Str("oldUser", c.user).Str("newUser", user).Msg("User already authenticated, cannot re-authenticate")
+		if c.metrics != nil {
+			c.metrics.RecordAuthFailure(user)
+		}
 		return
 	}
 	log.Info().Str("user", user).Msg("User authenticated")
 	c.user = user
+	
+	// Record successful authentication
+	if c.metrics != nil {
+		c.metrics.RecordAuthentication(user)
+	}
+	
 	if c.rateLimiterManager != nil {
 		localLimiter := c.rateLimiterManager.GetLocalLimiter(user)
 		// Note: We don't cache global limiter anymore - it's looked up dynamically
@@ -439,6 +468,11 @@ func (c *ClientMessageParser) extractUsernameFromJWT(jwtToken string) string {
 
 // GetUser returns the authenticated user name, or empty string if not authenticated
 func (c *ClientMessageParser) GetUser() string {
+	return c.user
+}
+
+// GetAuthenticatedUser returns the authenticated user name, or empty string if not authenticated
+func (c *ClientMessageParser) GetAuthenticatedUser() string {
 	return c.user
 }
 
