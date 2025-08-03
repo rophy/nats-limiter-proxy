@@ -4,17 +4,17 @@ This directory contains comprehensive end-to-end tests including tests adapted f
 
 ## Test Structure
 
-### Core Test Files
+### Core E2E Test Files
 
-- **`basic_test.go`** - Original basic proxy functionality tests
-- **`jetstream_test.go`** - Original JetStream-specific tests
+- **`e2e_basic_test.go`** - Original basic proxy functionality tests
+- **`e2e_jetstream_test.go`** - Original JetStream-specific tests
 
-### Additional E2E Test Files
+### NATS Server-Adapted Test Files
 
-- **`integration_auth_test.go`** - Authentication and authorization testing
-- **`integration_protocol_test.go`** - NATS protocol compliance testing  
-- **`integration_clustering_test.go`** - Proxy resilience and load distribution
-- **`integration_benchmark_test.go`** - Performance benchmarking and comparison
+- **`nats_server_auth_test.go`** - Authentication and authorization testing
+- **`nats_server_proto_test.go`** - NATS protocol compliance testing  
+- **`nats_server_cluster_test.go`** - Proxy resilience and load distribution
+- **`nats_server_bench_test.go`** - Performance benchmarking and comparison
 
 ## Running Tests
 
@@ -39,7 +39,7 @@ make test-bench        # Run performance benchmarks
 
 ## Test Categories
 
-### 1. Authentication Tests (`integration_auth_test.go`)
+### 1. Authentication Tests (`nats_server_auth_test.go`)
 
 **Purpose**: Validate authentication mechanisms work correctly through the proxy.
 
@@ -50,7 +50,7 @@ make test-bench        # Run performance benchmarks
 
 **Adapted From**: NATS server `auth_test.go`, `client_auth_test.go`
 
-### 2. Protocol Compliance Tests (`integration_protocol_test.go`)
+### 2. Protocol Compliance Tests (`nats_server_proto_test.go`)
 
 **Purpose**: Ensure proxy correctly handles NATS protocol messages and semantics.
 
@@ -62,7 +62,7 @@ make test-bench        # Run performance benchmarks
 
 **Adapted From**: NATS server `proto_test.go`, `routes_test.go`
 
-### 3. Resilience & Clustering Tests (`integration_clustering_test.go`)
+### 3. Resilience & Clustering Tests (`nats_server_cluster_test.go`)
 
 **Purpose**: Test proxy behavior under failure conditions and load distribution.
 
@@ -73,7 +73,7 @@ make test-bench        # Run performance benchmarks
 
 **Adapted From**: NATS server `cluster_test.go`, connection handling patterns
 
-### 4. Performance & Benchmarks (`integration_benchmark_test.go`)
+### 4. Performance & Benchmarks (`nats_server_bench_test.go`)
 
 **Purpose**: Measure and compare proxy performance against direct NATS connections.
 
