@@ -15,6 +15,7 @@ This directory contains comprehensive end-to-end tests including tests adapted f
 - **`nats_server_proto_test.go`** - NATS protocol compliance testing  
 - **`nats_server_cluster_test.go`** - Proxy resilience and load distribution
 - **`nats_server_bench_test.go`** - Performance benchmarking and comparison
+- **`nats_server_maxpayload_test.go`** - Maximum payload size enforcement testing
 
 ## Running Tests
 
@@ -84,6 +85,18 @@ make test-bench        # Run performance benchmarks
 - `TestE2E_ConcurrentLoadTesting` - Concurrent publishers/subscribers load testing
 
 **Adapted From**: NATS server `bench_test.go`
+
+### 5. Maximum Payload Tests (`nats_server_maxpayload_test.go`)
+
+**Purpose**: Verify that NATS server's maximum payload size enforcement works correctly through the proxy.
+
+**Key Tests**:
+- `TestE2E_MaxPayloadEnforcement` - Tests payload size limits work through proxy vs direct
+- `TestE2E_MaxPayloadWithSubscription` - Tests payload limits with active subscriptions  
+- `TestE2E_MaxPayloadErrorHandling` - Tests error handling for oversized payloads
+- `TestE2E_MaxPayloadConsistency` - Tests proxy doesn't modify payload size behavior
+
+**Adapted From**: NATS server `maxpayload_test.go`
 
 ## Test Patterns
 
