@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/juju/ratelimit"
@@ -37,7 +38,7 @@ type GlobalRateLimiter struct {
 	config       *Config
 	redisClient  *redis.Client
 	myPeerID     string
-	shutdown     chan struct{}
+	isShuttingDown atomic.Bool
 	
 	// Usage tracking
 	usageBuffers  map[string]int64         // username -> bytes used since last sync
@@ -66,7 +67,6 @@ func NewGlobalRateLimiter(config *Config, peerID string) (*GlobalRateLimiter, er
 	grl := &GlobalRateLimiter{
 		config:        config,
 		myPeerID:      peerID,
-		shutdown:      make(chan struct{}),
 		usageBuffers:  make(map[string]int64),
 		usageStats:    make(map[string]*GlobalUserStats),
 		globalBuckets: make(map[string]*ratelimit.Bucket),
@@ -249,7 +249,7 @@ func (grl *GlobalRateLimiter) Start() error {
 // Stop shuts down the global rate limiter
 func (grl *GlobalRateLimiter) Stop() {
 	log.Info().Msg("Stopping global rate limiter")
-	close(grl.shutdown)
+	grl.isShuttingDown.Store(true)
 	
 	if grl.redisClient != nil {
 		grl.redisClient.Close()
@@ -258,31 +258,17 @@ func (grl *GlobalRateLimiter) Stop() {
 
 // publishLoop publishes usage data to Redis every 1 second
 func (grl *GlobalRateLimiter) publishLoop() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			grl.publishUsageToRedis()
-		case <-grl.shutdown:
-			return
-		}
+	for !grl.isShuttingDown.Load() {
+		grl.publishUsageToRedis()
+		time.Sleep(1 * time.Second)
 	}
 }
 
 // rebalanceLoop rebalances global quotas every 5 seconds
 func (grl *GlobalRateLimiter) rebalanceLoop() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			grl.rebalanceGlobalQuotas()
-		case <-grl.shutdown:
-			return
-		}
+	for !grl.isShuttingDown.Load() {
+		grl.rebalanceGlobalQuotas()
+		time.Sleep(5 * time.Second)
 	}
 }
 

@@ -3,7 +3,7 @@ bandwidth:
   default_global: 204800  # 200KB/s total across all proxies
   users:
     alice:
-      local: 5242880      # 5MB/s per proxy instance
+      local:  20000000      # 5MB/s per proxy instance
       global: 15728640    # 15MB/s total across all proxies
     bob:
       local: 2097152      # 2MB/s per proxy instance
