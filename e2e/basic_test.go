@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"testing"
@@ -271,19 +272,19 @@ func TestE2E_LargeMessage(t *testing.T) {
 			t.Errorf("Size mismatch: expected %d bytes, got %d bytes", len(largeMessage), len(received))
 		}
 		
-		// Verify content integrity (check first and last 100 bytes)
-		for i := 0; i < 100; i++ {
-			if received[i] != largeMessage[i] {
-				t.Errorf("Content mismatch at byte %d: expected %d, got %d", i, largeMessage[i], received[i])
-				break
+		// Verify complete content integrity (every single byte)
+		if !bytes.Equal(received, largeMessage) {
+			t.Error("Complete message content mismatch - proxy corrupted data")
+			
+			// Find first difference for debugging
+			for i := 0; i < len(largeMessage) && i < len(received); i++ {
+				if received[i] != largeMessage[i] {
+					t.Errorf("First difference at byte %d: expected %d, got %d", i, largeMessage[i], received[i])
+					break
+				}
 			}
-		}
-		
-		for i := len(received) - 100; i < len(received); i++ {
-			if received[i] != largeMessage[i] {
-				t.Errorf("Content mismatch at byte %d: expected %d, got %d", i, largeMessage[i], received[i])
-				break
-			}
+		} else {
+			t.Log("✓ Complete message integrity verified - every byte matches")
 		}
 		
 		t.Logf("✓ Large message (%d bytes) successfully transmitted in %v", len(received), duration)
@@ -352,18 +353,161 @@ func TestE2E_ConcurrentConnections(t *testing.T) {
 	// Wait for all publishers to finish
 	wg.Wait()
 	
-	// Collect all messages
+	// Collect all messages and verify content
 	receivedCount := 0
+	receivedContent := make(map[string]bool) // Track unique messages
 	timeout := time.After(15 * time.Second)
 	
 	for receivedCount < totalMessages {
 		select {
-		case <-receivedMessages:
+		case msg := <-receivedMessages:
 			receivedCount++
+			receivedContent[msg] = true
+			
+			// Verify message format matches expected pattern
+			var publisherID, messageNum int
+			if n, err := fmt.Sscanf(msg, "Publisher-%d-Message-%d", &publisherID, &messageNum); n != 2 || err != nil {
+				t.Errorf("Invalid message format: %q", msg)
+			}
+			
 		case <-timeout:
 			t.Fatalf("Timeout waiting for concurrent messages. Received %d/%d", receivedCount, totalMessages)
 		}
 	}
 	
+	// Verify we received all expected unique messages (no duplicates/losses)
+	if len(receivedContent) != totalMessages {
+		t.Errorf("Message integrity issue: expected %d unique messages, got %d", totalMessages, len(receivedContent))
+		
+		// Check for expected messages
+		expectedMessages := make(map[string]bool)
+		for p := 0; p < publisherCount; p++ {
+			for m := 0; m < messagesPerPublisher; m++ {
+				expectedMessages[fmt.Sprintf("Publisher-%d-Message-%d", p, m+1)] = true
+			}
+		}
+		
+		// Find missing messages
+		for expected := range expectedMessages {
+			if !receivedContent[expected] {
+				t.Errorf("Missing message: %q", expected)
+			}
+		}
+	} else {
+		t.Log("✓ Complete message integrity verified - all unique messages received")
+	}
+	
 	t.Logf("✓ Successfully received all %d messages from %d concurrent publishers", totalMessages, publisherCount)
+}
+
+func TestE2E_DataIntegrityPatterns(t *testing.T) {
+	env := testutil.NewDockerComposeEnv()
+	
+	// Wait for services to be ready
+	env.WaitForNATSReady(t)
+	env.WaitForProxyReady(t)
+	
+	// Create connections
+	publisher := env.ConnectToProxy(t)
+	subscriber := env.ConnectToProxy(t)
+	
+	testCases := []struct {
+		name string
+		data []byte
+		desc string
+	}{
+		{
+			name: "AllZeros",
+			data: make([]byte, 10000), // All zeros
+			desc: "10KB of zero bytes",
+		},
+		{
+			name: "AllOnes", 
+			data: bytes.Repeat([]byte{0xFF}, 10000), // All 255s
+			desc: "10KB of 0xFF bytes",
+		},
+		{
+			name: "RandomPattern",
+			data: func() []byte {
+				// Create pseudo-random pattern
+				data := make([]byte, 10000)
+				for i := range data {
+					data[i] = byte((i * 37 + 91) % 256) // Pseudo-random but deterministic
+				}
+				return data
+			}(),
+			desc: "10KB pseudo-random pattern",
+		},
+		{
+			name: "BinaryData",
+			data: func() []byte {
+				// Binary data with nulls and control characters
+				data := make([]byte, 10000)
+				for i := range data {
+					data[i] = byte(i % 256) // 0-255 repeating pattern
+				}
+				return data
+			}(),
+			desc: "10KB binary data (0-255 repeating)",
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			subject := fmt.Sprintf("test.integrity.%s", tc.name)
+			receivedMsg := make(chan []byte, 1)
+			
+			// Subscribe
+			sub, err := subscriber.Subscribe(subject, func(msg *nats.Msg) {
+				receivedMsg <- msg.Data
+			})
+			if err != nil {
+				t.Fatalf("Failed to subscribe: %v", err)
+			}
+			defer sub.Unsubscribe()
+			
+			// Wait for subscription
+			if err := subscriber.Flush(); err != nil {
+				t.Fatalf("Failed to flush subscriber: %v", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+			
+			t.Logf("Testing %s (%d bytes)", tc.desc, len(tc.data))
+			
+			// Publish
+			start := time.Now()
+			if err := publisher.Publish(subject, tc.data); err != nil {
+				t.Fatalf("Failed to publish %s: %v", tc.name, err)
+			}
+			
+			// Receive and verify
+			select {
+			case received := <-receivedMsg:
+				duration := time.Since(start)
+				
+				// Verify exact match
+				if !bytes.Equal(received, tc.data) {
+					t.Errorf("%s: Content mismatch - proxy corrupted data", tc.name)
+					t.Errorf("Expected length: %d, Received length: %d", len(tc.data), len(received))
+					
+					// Find first difference
+					minLen := len(tc.data)
+					if len(received) < minLen {
+						minLen = len(received)
+					}
+					for i := 0; i < minLen; i++ {
+						if received[i] != tc.data[i] {
+							t.Errorf("First difference at byte %d: expected 0x%02X, got 0x%02X", i, tc.data[i], received[i])
+							break
+						}
+					}
+				} else {
+					t.Logf("✓ %s: Perfect data integrity - all %d bytes match (transmitted in %v)", tc.desc, len(received), duration)
+				}
+				
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s: Timeout waiting for message", tc.name)
+			}
+		})
+	}
 }
