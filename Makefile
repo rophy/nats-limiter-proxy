@@ -61,10 +61,10 @@ test-distributed: docker-up
 	@echo "Running distributed rate limiting tests..."
 	./test-distributed.sh
 
-# Build e2e test binary
+# Build e2e test binary (static for Alpine Linux containers)
 build-e2e:
 	mkdir -p bin
-	go test -c ./e2e -o bin/e2e.test
+	CGO_ENABLED=0 GOOS=linux go test -c ./e2e -o bin/e2e.test
 
 # Run e2e tests inside docker-compose nats-box
 test-e2e: docker-up build-e2e

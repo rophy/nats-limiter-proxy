@@ -41,8 +41,12 @@ func NewDockerComposeEnv() *DockerComposeEnv {
 }
 
 // ConnectToNATSDirect creates a connection directly to NATS server (bypassing proxy)
+// Uses Alice credentials by default since NATS server requires authentication
 func (env *DockerComposeEnv) ConnectToNATSDirect(t *testing.T) *nats.Conn {
-	nc, err := nats.Connect(env.NATSDirectURL, nats.Timeout(10*time.Second))
+	nc, err := nats.Connect(env.NATSDirectURL, 
+		nats.UserCredentials(GetAliceCredentials()),
+		nats.Timeout(10*time.Second),
+	)
 	if err != nil {
 		t.Fatalf("Failed to connect to NATS server directly: %v", err)
 	}
@@ -55,8 +59,12 @@ func (env *DockerComposeEnv) ConnectToNATSDirect(t *testing.T) *nats.Conn {
 }
 
 // ConnectToProxy creates a connection through the proxy
+// Uses Alice credentials by default
 func (env *DockerComposeEnv) ConnectToProxy(t *testing.T) *nats.Conn {
-	nc, err := nats.Connect(env.ProxyURL, nats.Timeout(10*time.Second))
+	nc, err := nats.Connect(env.ProxyURL, 
+		nats.UserCredentials(GetAliceCredentials()),
+		nats.Timeout(10*time.Second),
+	)
 	if err != nil {
 		t.Fatalf("Failed to connect to proxy: %v", err)
 	}
@@ -122,7 +130,10 @@ func (env *DockerComposeEnv) WaitForProxyReady(t *testing.T) {
 		case <-timeout:
 			t.Fatal("Timeout waiting for proxy to be ready")
 		case <-ticker.C:
-			nc, err := nats.Connect(env.ProxyURL, nats.Timeout(2*time.Second))
+			nc, err := nats.Connect(env.ProxyURL, 
+				nats.UserCredentials(GetAliceCredentials()),
+				nats.Timeout(2*time.Second),
+			)
 			if err == nil {
 				nc.Close()
 				t.Log("Proxy is ready")
@@ -144,7 +155,10 @@ func (env *DockerComposeEnv) WaitForNATSReady(t *testing.T) {
 		case <-timeout:
 			t.Fatal("Timeout waiting for NATS to be ready")
 		case <-ticker.C:
-			nc, err := nats.Connect(env.NATSDirectURL, nats.Timeout(2*time.Second))
+			nc, err := nats.Connect(env.NATSDirectURL, 
+				nats.UserCredentials(GetAliceCredentials()),
+				nats.Timeout(2*time.Second),
+			)
 			if err == nil {
 				nc.Close()
 				t.Log("NATS server is ready")
@@ -157,7 +171,7 @@ func (env *DockerComposeEnv) WaitForNATSReady(t *testing.T) {
 
 // GetCredentialsPath returns the path to user credentials inside nats-box
 func GetCredentialsPath(username string) string {
-	return fmt.Sprintf("/nsc/creds/%s.creds", username)
+	return fmt.Sprintf("/nsc/nkeys/creds/root/app/%s.creds", username)
 }
 
 // GetAliceCredentials returns Alice's credentials path
