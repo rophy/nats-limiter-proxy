@@ -58,8 +58,8 @@ go test -v ./internal/server
 go test -cover ./internal/server
 ```
 
-#### End-to-End Tests
-Full integration tests running in Docker Compose environment:
+#### End-to-End Tests (Go-based)
+Full integration tests implemented in Go, running in Docker Compose environment:
 
 ```bash
 # Run all e2e tests (includes basic NATS, JetStream, and data integrity tests)
@@ -79,12 +79,15 @@ docker compose exec nats-box /tmp/e2e.test -test.v -test.run "TestE2E_JetStream"
 - **JetStream**: Stream creation, pub/sub, large messages, direct vs proxy comparison
 - **Proxy vs Direct**: Comparison testing to ensure proxy doesn't alter behavior
 
-#### Performance Tests
-Throughput and rate limiting validation:
+#### Performance Tests (NATS CLI-based)
+Throughput and rate limiting validation using NATS bench tool:
 
 ```bash
-# Performance/benchmark test
+# Performance/benchmark test - runs shell script with 'nats bench' command
 make test-perf
+
+# What make test-perf actually runs:
+nats --context=alice bench pub test --size=1024 --msgs=100000 --no-progress
 
 # Custom benchmark tests
 nats --server=localhost:4223 --creds=local/app/alice.creds bench pub test --size=1024 --msgs=100000 --no-progress
@@ -389,8 +392,8 @@ make help           # Show all available commands
 make build          # Build Go binary
 make docker-build   # Build Docker image
 make test           # Run unit tests
-make test-e2e       # Run e2e integration tests
-make test-perf      # Run performance tests
+make test-e2e       # Run Go-based e2e integration tests  
+make test-perf      # Run NATS CLI performance benchmarks
 make clean          # Clean build artifacts and Docker environment
 ```
 

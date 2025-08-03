@@ -1,4 +1,4 @@
-.PHONY: help init build run clean docker-build docker-up docker-down test test-distributed test-e2e test-bench build-e2e
+.PHONY: help init build run clean docker-build docker-up docker-down test test-e2e build-e2e
 
 # Show help
 help:
@@ -15,7 +15,6 @@ help:
 	@echo "  test         - Run unit tests"
 	@echo "  test-perf    - Run performance/benchmark tests (requires docker-up)"
 	@echo "  test-e2e     - Run e2e tests inside docker-compose nats-box"
-	@echo "  test-bench   - Run benchmark tests (requires docker-up)"
 	@echo "  build-e2e    - Build e2e test binary"
 	@echo "  reset        - Complete environment reset (clean + init + docker-up)"
 	@echo ""
@@ -76,12 +75,6 @@ test-e2e: docker-up build-e2e
 	@echo "Running e2e tests inside nats-box..."
 	docker compose exec nats-box /tmp/e2e.test -test.v
 
-# Run benchmark tests
-test-bench: docker-up build-e2e
-	@echo "Copying e2e test binary to nats-box..."
-	docker compose cp bin/e2e.test nats-box:/tmp/e2e.test
-	@echo "Running benchmark tests inside nats-box..."
-	docker compose exec nats-box /tmp/e2e.test -test.v -test.run "TestE2E_.*Performance|TestE2E_.*Load" -test.bench "BenchmarkE2E"
 
 local/nats/resolver.conf:
 	local/scripts/init.sh

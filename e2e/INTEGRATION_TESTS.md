@@ -24,10 +24,6 @@ This directory contains comprehensive end-to-end tests including tests adapted f
 make test-e2e          # Run all e2e tests
 ```
 
-### Benchmark Tests
-```bash
-make test-bench        # Run performance benchmarks
-```
 
 ### Individual Test Categories
 ```bash

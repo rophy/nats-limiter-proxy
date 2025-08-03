@@ -32,25 +32,27 @@ A NATS server proxy that adds per-user bandwidth limiting functionality with dis
 ## AI-Specific Development Guidelines
 
 ### Testing Approach
-- **Always run tests**: Use `make test` (unit), `make test-e2e` (integration), `make test-perf` (performance)
+- **Always run tests**: Use `make test` (unit), `make test-e2e` (e2e including benchmarks)
 - **Test environment setup**: `make docker-up` starts the complete environment
 - **Clean environment**: Use `make clean` for complete reset (removes Docker volumes)
 - **JetStream testing**: E2E tests handle dynamic stream creation to avoid permission issues
+- **NATS server compatibility**: E2E tests include comprehensive NATS server-adapted tests
 
 ### Key File Locations for AI Context
 - **Core proxy logic**: `internal/server/parser.go` - NATS protocol parsing and rate limiting
 - **Authentication**: Extract usernames from CONNECT messages (basic auth or JWT)
 - **Rate limiting**: `internal/server/ratelimiter.go` - Token bucket implementation
 - **Distributed coordination**: `internal/server/coordination.go` - Multi-proxy coordination
-- **E2E tests**: `e2e/` directory - Comprehensive integration tests including JetStream
+- **E2E tests**: `e2e/` directory - Comprehensive e2e tests including JetStream
+- **Original e2e tests**: `e2e/e2e_*.go` - Basic proxy functionality tests
+- **NATS server-adapted tests**: `e2e/nats_server_*.go` - Protocol compliance tests
 - **Unit tests**: `internal/server/*_test.go` - Component-level testing
 
 ### Common Development Tasks
 ```bash
 # Quick development cycle
 make test           # Run unit tests (fast, no Docker)
-make test-e2e       # Run integration tests (requires Docker)
-make test-perf      # Run performance tests
+make test-e2e       # Run all e2e tests including benchmarks (requires Docker)
 
 # Environment management  
 make docker-up      # Start complete test environment
@@ -64,7 +66,8 @@ make init           # Initialize NATS accounts/users
 - **Rate limiting**: Changes to `internal/server/ratelimiter.go` should include performance test validation
 - **Authentication**: JWT and basic auth logic is in parser.go - test with both auth methods
 - **JetStream**: E2E tests create streams dynamically to avoid init permission issues
-- **Distributed features**: Test with `make test-perf` which uses 3 proxy replicas
+- **Performance testing**: E2E tests include comprehensive benchmarks
+- **NATS server compatibility**: Run `make test-e2e` to validate proxy doesn't break NATS server functionality
 
 ### Debugging Tips
 - **When confused or stuck**: Use `make reset` for complete environment reset
@@ -74,3 +77,19 @@ make init           # Initialize NATS accounts/users
 - **JetStream problems**: E2E tests skip if JetStream unavailable (check NATS server config)
 - **Environment corruption**: `make reset` does clean + init + docker-up in one command
 
+## Test References and Origins
+
+### E2E Test Structure
+- **Original e2e tests** (`e2e/e2e_*.go`): Basic proxy functionality tests
+- **NATS server-adapted tests** (`e2e/nats_server_*.go`): Protocol compliance tests
+
+### NATS Server Test Mapping
+The tests in `e2e/nats_server_*` are learned from https://github.com/nats-io/nats-server/blob/main/test/ with one-to-one file name mapping:
+
+- `nats_server_auth_test.go` ← `auth_test.go`
+- `nats_server_proto_test.go` ← `proto_test.go`
+- `nats_server_cluster_test.go` ← `cluster_test.go`
+- `nats_server_bench_test.go` ← `bench_test.go`
+- `nats_server_maxpayload_test.go` ← `maxpayload_test.go`
+
+These tests verify that NATS server functionality works correctly **through** the proxy without interference.
