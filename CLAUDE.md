@@ -29,6 +29,8 @@ type: short description
 
 A NATS server proxy that adds per-user bandwidth limiting functionality with distributed coordination support. See README.md for detailed architecture and usage information.
 
+**Current Limitations**: TLS is not supported. The proxy currently handles plain-text NATS connections only.
+
 ## AI-Specific Development Guidelines
 
 ### Testing Approach
@@ -92,4 +94,34 @@ The tests in `e2e/nats_server_*` are learned from https://github.com/nats-io/nat
 - `nats_server_bench_test.go` ← `bench_test.go`
 - `nats_server_maxpayload_test.go` ← `maxpayload_test.go`
 
+**Not implemented (future work)**:
+- TLS-related tests (`cluster_tls_test.go`, `tls_test.go`) - TLS support not yet implemented
+
 These tests verify that NATS server functionality works correctly **through** the proxy without interference.
+
+### TLS Implementation Considerations (Future Work)
+
+When implementing TLS support, two architectural approaches need consideration:
+
+1. **TLS Pass-Through**: Proxy forwards encrypted traffic
+   - Pros: Maintains end-to-end encryption, simpler proxy logic
+   - Cons: Cannot parse NATS protocol for rate limiting (encrypted payload)
+   - Use case: When rate limiting can be based on connection-level metrics only
+
+2. **TLS Termination**: Proxy decrypts, parses, re-encrypts  
+   - Pros: Enables NATS protocol parsing for per-message rate limiting
+   - Cons: More complex, proxy becomes part of security boundary
+   - Use case: When detailed protocol-aware rate limiting is required
+
+**Recommended Test Adaptation**: 
+- `cluster_tls_test.go` → `nats_server_cluster_tls_test.go` (TLS cluster behavior)
+- `tls_test.go` → `nats_server_tls_test.go` (TLS client-server behavior)
+
+**Key Test Scenarios to Cover**:
+- Certificate verification pass-through
+- TLS handshake error propagation  
+- Mutual TLS (mTLS) support
+- TLS timeout handling
+- Secure connection multiplexing
+
+The choice between pass-through vs termination will determine which test patterns are most relevant.

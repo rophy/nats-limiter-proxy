@@ -11,6 +11,10 @@ A NATS server proxy that adds per-user bandwidth limiting functionality with dis
 - **Docker Compose Ready**: Easy development with 3-replica setup
 - **Backward Compatibility**: Legacy configuration format automatically migrated
 
+## Limitations
+
+- **TLS Support**: Currently not supported. TLS pass-through and termination support is planned for future releases.
+
 ## Quick Start
 
 ### Local Mode (Single Instance)
