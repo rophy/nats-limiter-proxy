@@ -1,4 +1,4 @@
-.PHONY: help init build run clean docker-build docker-up docker-down test test-distributed
+.PHONY: help init build run clean docker-build docker-up docker-down test test-distributed test-e2e build-e2e
 
 # Show help
 help:
@@ -14,6 +14,8 @@ help:
 	@echo "  docker-down  - Stop Docker Compose services"
 	@echo "  test         - Run integration tests (requires docker-up)"
 	@echo "  test-distributed - Test distributed rate limiting with 3 proxy nodes"
+	@echo "  test-e2e     - Run e2e tests inside docker-compose nats-box"
+	@echo "  build-e2e    - Build e2e test binary"
 	@echo ""
 	@echo "Quick start:"
 	@echo "  make docker-up    # Start all services"
@@ -58,6 +60,18 @@ test-distributed: docker-up
 	@sleep 10
 	@echo "Running distributed rate limiting tests..."
 	./test-distributed.sh
+
+# Build e2e test binary
+build-e2e:
+	mkdir -p bin
+	go test -c ./e2e -o bin/e2e.test
+
+# Run e2e tests inside docker-compose nats-box
+test-e2e: docker-up build-e2e
+	@echo "Copying e2e test binary to nats-box..."
+	docker compose cp bin/e2e.test nats-box:/tmp/e2e.test
+	@echo "Running e2e tests inside nats-box..."
+	docker compose exec nats-box /tmp/e2e.test -test.v
 
 local/nats/resolver.conf:
 	local/scripts/init.sh
