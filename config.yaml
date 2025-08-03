@@ -2,3 +2,12 @@ default_bandwidth: 102400  # 100KB/s
 users:
   alice: 5242880   # 5MB/s
   bob: 2097152    # 2MB/s
+
+# Peer coordination settings for distributed rate limiting
+coordination:
+  enabled: false                    # Enable distributed coordination
+  port: 8081                       # HTTP port for peer communication
+  gossip_interval: 5s              # How often to send usage gossip
+  rebalance_interval: 30s          # How often to rebalance tokens
+  cleanup_interval: 60s            # How often to cleanup old data
+  discovery_method: kubernetes     # kubernetes, static, or dns
