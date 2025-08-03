@@ -19,8 +19,8 @@ A NATS server proxy that adds per-user bandwidth limiting functionality with dis
 make init
 make docker-up
 
-# Test rate limiting
-make test
+# Test rate limiting  
+make test-perf
 
 # View available commands
 make help
@@ -31,11 +31,156 @@ make help
 # Start 3 proxy replicas with Redis coordination
 make docker-up  # Uses config-redis.yaml by default
 
-# Test distributed rate limiting
-make test-distributed
+# Test performance and rate limiting
+make test-perf
 
 # Monitor Redis coordination
 docker compose logs proxy | grep -E "(rebalance|global)"
+```
+
+## Testing
+
+The project includes comprehensive testing at multiple levels to ensure reliability and performance.
+
+### Test Types
+
+#### Unit Tests
+Individual component testing for core functionality:
+
+```bash
+# Run all unit tests
+go test ./...
+
+# Run specific package tests with verbose output
+go test -v ./internal/server
+
+# Run tests with coverage report
+go test -cover ./internal/server
+```
+
+#### End-to-End Tests
+Full integration tests running in Docker Compose environment:
+
+```bash
+# Run all e2e tests (includes basic NATS, JetStream, and data integrity tests)
+make test-e2e
+
+# Run specific e2e test patterns
+make build-e2e
+docker compose exec nats-box /tmp/e2e.test -test.v -test.run "TestE2E_JetStream"
+```
+
+**E2E Test Coverage:**
+- **Basic Pub/Sub**: Message routing through proxy with authentication
+- **Large Message Integrity**: 1MB message transmission with byte-by-byte verification
+- **Concurrent Connections**: Multi-client stress testing with message integrity verification
+- **Data Integrity Patterns**: Various binary data patterns (zeros, ones, random, binary)
+- **Authentication**: Multi-user credential validation (Alice, Bob)
+- **JetStream**: Stream creation, pub/sub, large messages, direct vs proxy comparison
+- **Proxy vs Direct**: Comparison testing to ensure proxy doesn't alter behavior
+
+#### Performance Tests
+Throughput and rate limiting validation:
+
+```bash
+# Performance/benchmark test
+make test-perf
+
+# Custom benchmark tests
+nats --server=localhost:4223 --creds=local/app/alice.creds bench pub test --size=1024 --msgs=100000 --no-progress
+
+# Large message performance
+nats --server=localhost:4223 --creds=local/app/alice.creds bench pub test --size=1048576 --msgs=1000
+
+# Test global rate limiting (multiple connections)
+nats --server=localhost:4223 --creds=local/app/alice.creds bench pub test --size=1024 --msgs=100000 --clients=3
+
+# Manual verification scripts
+./manual_test.sh
+```
+
+### Test Environment Setup
+
+#### Prerequisites
+```bash
+# Start the complete test environment
+make docker-up
+
+# Verify all services are running
+docker compose ps
+```
+
+#### Test Data & Credentials
+The test environment automatically creates:
+- **NATS Users**: `alice`, `bob`, `admin` with JWT credentials
+- **JetStream**: Enabled with disk persistence (`/data/jetstream`)
+- **Rate Limits**: Alice (5MB/s), Bob (2MB/s), Default (100KB/s)
+- **Proxy Replicas**: 3 instances (ports 4223-4225) for distributed testing
+
+#### Running Specific Test Suites
+
+```bash
+# JetStream functionality tests
+make build-e2e
+docker compose exec nats-box /tmp/e2e.test -test.v -test.run "JetStream"
+
+# Data integrity tests
+docker compose exec nats-box /tmp/e2e.test -test.v -test.run "DataIntegrity"
+
+# Authentication tests
+docker compose exec nats-box /tmp/e2e.test -test.v -test.run "Authenticated"
+
+# Performance/load tests
+docker compose exec nats-box /tmp/e2e.test -test.v -test.run "Concurrent"
+```
+
+### Test Results Interpretation
+
+#### Successful Test Output
+```
+✓ Message successfully passed through proxy
+✓ Complete message integrity verified - every byte matches
+✓ JetStream message received and acknowledged
+✓ Large JetStream message (1048576 bytes) received and acknowledged
+✓ Complete large JetStream message integrity verified - every byte matches
+```
+
+#### Data Integrity Verification
+All tests include comprehensive data integrity checks:
+- **Byte-by-byte comparison** for large messages (1MB+)
+- **Message ordering** verification for concurrent tests
+- **JetStream persistence** validation with acknowledgments
+- **Binary data patterns** testing (zeros, ones, random, sequential)
+
+#### Performance Metrics
+Typical performance benchmarks:
+- **Small messages (1KB)**: ~50,000-100,000 msgs/sec per proxy
+- **Large messages (1MB)**: ~100-500 msgs/sec per proxy with full integrity verification
+- **JetStream publish**: ~42ms for 1MB message
+- **JetStream fetch**: ~9ms for 1MB message
+
+### Troubleshooting Tests
+
+#### Common Issues
+```bash
+# If tests fail with "Authorization Violation"
+make clean && make init
+
+# If Docker environment is not ready
+make docker-down && make docker-up
+
+# Check service health
+docker compose logs nats
+docker compose logs proxy
+```
+
+#### Test Environment Reset
+```bash
+# Complete environment reset
+make clean
+make init
+make docker-up
+make test-e2e
 ```
 
 ## Configuration
@@ -219,14 +364,6 @@ docker compose exec redis-master redis-cli --scan --pattern "user:*"
 docker compose exec redis-master redis-cli keys "user:alice:*"
 ```
 
-### Performance Testing
-```bash
-# Test local rate limiting (single proxy)
-nats --server=localhost:4223 --user=alice --password=alicepass bench pub test --size=1024 --msgs=100000
-
-# Test global rate limiting (multiple connections)
-nats --server=localhost:4223 --user=alice --password=alicepass bench pub test --size=1024 --msgs=100000 --clients=3
-```
 
 ## Port Configuration
 
@@ -251,21 +388,12 @@ nats --server=localhost:4223 --user=alice --password=alicepass bench pub test --
 make help           # Show all available commands
 make build          # Build Go binary
 make docker-build   # Build Docker image
-make test           # Run integration tests
-make clean          # Clean build artifacts
+make test           # Run unit tests
+make test-e2e       # Run e2e integration tests
+make test-perf      # Run performance tests
+make clean          # Clean build artifacts and Docker environment
 ```
 
-### Testing
-```bash
-# Local rate limiting (single proxy)
-make test
-
-# Global rate limiting (3 proxy replicas with Redis)
-make test-distributed
-
-# Manual verification
-./manual_test.sh
-```
 
 ## Dependencies
 

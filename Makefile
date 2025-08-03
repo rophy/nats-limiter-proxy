@@ -12,14 +12,14 @@ help:
 	@echo "  docker-build - Build Docker image"
 	@echo "  docker-up    - Start with Docker Compose (includes init)"
 	@echo "  docker-down  - Stop Docker Compose services"
-	@echo "  test         - Run integration tests (requires docker-up)"
-	@echo "  test-distributed - Test distributed rate limiting with 3 proxy nodes"
+	@echo "  test         - Run unit tests"
+	@echo "  test-perf    - Run performance/benchmark tests (requires docker-up)"
 	@echo "  test-e2e     - Run e2e tests inside docker-compose nats-box"
 	@echo "  build-e2e    - Build e2e test binary"
 	@echo ""
 	@echo "Quick start:"
 	@echo "  make docker-up    # Start all services"
-	@echo "  make test         # Run tests"
+	@echo "  make test-e2e     # Run e2e tests"
 	@echo "  make docker-down  # Stop services"
 
 # Initialize 
@@ -34,8 +34,9 @@ build:
 run: build
 	UPSTREAM_HOST=localhost UPSTREAM_PORT=4222 ./bin/nats-limiter-proxy
 
-# Clean build artifacts
+# Clean build artifacts and Docker environment
 clean:
+	docker compose down -v
 	local/scripts/cleanup.sh
 
 # Build Docker image
@@ -50,16 +51,14 @@ docker-up: init
 docker-down:
 	docker compose down
 
-# Run tests
-test: docker-up
+# Run unit tests
+test:
+	go test -v ./internal/...
+
+# Run performance/benchmark tests
+test-perf: docker-up
 	docker compose exec nats-box nats --context=alice bench pub test --size=1024 --msgs=100000 --no-progress
 
-# Test distributed rate limiting with 3 proxy nodes
-test-distributed: docker-up
-	@echo "Waiting for all proxy nodes to start..."
-	@sleep 10
-	@echo "Running distributed rate limiting tests..."
-	./test-distributed.sh
 
 # Build e2e test binary (static for Alpine Linux containers)
 build-e2e:
