@@ -54,7 +54,8 @@ make test-perf      # Run performance tests
 
 # Environment management  
 make docker-up      # Start complete test environment
-make clean          # Complete reset (removes volumes)
+make reset          # Complete reset: clean + init + docker-up
+make clean          # Clean environment (removes volumes)
 make init           # Initialize NATS accounts/users
 ```
 
@@ -66,8 +67,10 @@ make init           # Initialize NATS accounts/users
 - **Distributed features**: Test with `make test-perf` which uses 3 proxy replicas
 
 ### Debugging Tips
-- **Authorization failures**: Use `make clean && make init` to reset NATS credentials
+- **When confused or stuck**: Use `make reset` for complete environment reset
+- **Authorization failures**: `make reset` will fix NATS credential issues
 - **Test failures**: Check `docker compose logs nats` and `docker compose logs proxy`
 - **Rate limiting issues**: Unit tests in `internal/server/parser_test.go` have detailed rate limiting scenarios
 - **JetStream problems**: E2E tests skip if JetStream unavailable (check NATS server config)
+- **Environment corruption**: `make reset` does clean + init + docker-up in one command
 

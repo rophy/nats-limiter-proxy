@@ -16,6 +16,7 @@ help:
 	@echo "  test-perf    - Run performance/benchmark tests (requires docker-up)"
 	@echo "  test-e2e     - Run e2e tests inside docker-compose nats-box"
 	@echo "  build-e2e    - Build e2e test binary"
+	@echo "  reset        - Complete environment reset (clean + init + docker-up)"
 	@echo ""
 	@echo "Quick start:"
 	@echo "  make docker-up    # Start all services"
@@ -59,6 +60,8 @@ test:
 test-perf: docker-up
 	docker compose exec nats-box nats --context=alice bench pub test --size=1024 --msgs=100000 --no-progress
 
+# Complete environment reset (clean + init + docker-up)
+reset: clean init docker-up
 
 # Build e2e test binary (static for Alpine Linux containers)
 build-e2e:
