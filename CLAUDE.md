@@ -93,11 +93,28 @@ The tests in `e2e/nats_server_*` are learned from https://github.com/nats-io/nat
 - `nats_server_cluster_test.go` ← `cluster_test.go`
 - `nats_server_bench_test.go` ← `bench_test.go`
 - `nats_server_maxpayload_test.go` ← `maxpayload_test.go`
+- `nats_server_service_latency_test.go` ← `service_latency_test.go`
 
 **Not implemented (future work)**:
 - TLS-related tests (`cluster_tls_test.go`, `tls_test.go`) - TLS support not yet implemented
 
 These tests verify that NATS server functionality works correctly **through** the proxy without interference.
+
+### Service Latency Test Coverage
+The `nats_server_service_latency_test.go` includes comprehensive service latency validation:
+
+- **Basic Service Latency**: Request/response timing with processing delays
+- **Proxy vs Direct Comparison**: Measures proxy overhead (typically < 1ms)
+- **Error Handling**: Service timeouts, no responders, service errors
+- **Concurrent Requests**: Multi-client latency consistency testing
+- **Header Preservation**: Distributed tracing headers maintained through proxy
+
+**Key Metrics Validated**:
+- Service response latency preservation
+- Minimal proxy overhead (< 50ms threshold)
+- Proper error propagation (NATS timeout/no responders)
+- Header pass-through for observability tools
+- Concurrent request performance consistency
 
 ### TLS Implementation Considerations (Future Work)
 
