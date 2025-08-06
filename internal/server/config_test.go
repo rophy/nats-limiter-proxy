@@ -4,14 +4,15 @@ import (
 	"testing"
 )
 
-func TestConfig_NormalizeLimits(t *testing.T) {
+func TestConfig_ValidateLimitsConfig(t *testing.T) {
 	tests := []struct {
-		name     string
-		config   Config
-		expected *LimitsConfig
+		name      string
+		config    Config
+		expectErr bool
+		expected  *LimitsConfig
 	}{
 		{
-			name: "New format already exists - no migration needed",
+			name: "Valid config with defaults and users",
 			config: Config{
 				Limits: &LimitsConfig{
 					Defaults: &UserLimits{BPSLocal: 1000, BPSGlobal: 2000},
@@ -20,6 +21,7 @@ func TestConfig_NormalizeLimits(t *testing.T) {
 					},
 				},
 			},
+			expectErr: false,
 			expected: &LimitsConfig{
 				Defaults: &UserLimits{BPSLocal: 1000, BPSGlobal: 2000},
 				Users: []*UserLimit{
@@ -28,61 +30,66 @@ func TestConfig_NormalizeLimits(t *testing.T) {
 			},
 		},
 		{
-			name: "Migrate from bandwidth config",
+			name:      "Missing limits config",
+			config:    Config{},
+			expectErr: true,
+		},
+		{
+			name: "Missing defaults - should create them",
 			config: Config{
-				Bandwidth: &BandwidthConfig{
-					DefaultLocal:  1024,
-					DefaultGlobal: 2048,
-					Users: map[string]*UserBandwidth{
-						"alice": {Local: 5120, Global: 10240},
-						"bob":   {Local: 2048, Global: 0}, // Global defaults to Local
+				Limits: &LimitsConfig{
+					Users: []*UserLimit{
+						{User: "alice", BPSLocal: 5000, BPSGlobal: 10000},
 					},
 				},
 			},
-			expected: &LimitsConfig{
-				Defaults: &UserLimits{BPSLocal: 1024, BPSGlobal: 2048},
-				Users: []*UserLimit{
-					{User: "alice", BPSLocal: 5120, BPSGlobal: 10240},
-					{User: "bob", BPSLocal: 2048, BPSGlobal: 2048}, // Global defaulted to Local
-				},
-			},
-		},
-		{
-			name: "Migrate from legacy format",
-			config: Config{
-				DefaultBandwidth: 1024,
-				Users: map[string]int64{
-					"alice": 5120,
-					"bob":   2048,
-				},
-			},
-			expected: &LimitsConfig{
-				Defaults: &UserLimits{BPSLocal: 1024, BPSGlobal: 1024},
-				Users: []*UserLimit{
-					{User: "alice", BPSLocal: 5120, BPSGlobal: 5120},
-					{User: "bob", BPSLocal: 2048, BPSGlobal: 2048},
-				},
-			},
-		},
-		{
-			name: "No config - create defaults",
-			config: Config{},
+			expectErr: false,
 			expected: &LimitsConfig{
 				Defaults: &UserLimits{BPSLocal: 102400, BPSGlobal: 102400},
-				Users:    []*UserLimit{},
+				Users: []*UserLimit{
+					{User: "alice", BPSLocal: 5000, BPSGlobal: 10000},
+				},
+			},
+		},
+		{
+			name: "Zero values should get defaults",
+			config: Config{
+				Limits: &LimitsConfig{
+					Defaults: &UserLimits{BPSLocal: 0, BPSGlobal: 0},
+					Users: []*UserLimit{
+						{User: "alice", BPSLocal: 0, BPSGlobal: 0},
+					},
+				},
+			},
+			expectErr: false,
+			expected: &LimitsConfig{
+				Defaults: &UserLimits{BPSLocal: 102400, BPSGlobal: 102400},
+				Users: []*UserLimit{
+					{User: "alice", BPSLocal: 102400, BPSGlobal: 102400},
+				},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Make a copy to avoid modifying the test case
 			cfg := tt.config
-			cfg.NormalizeLimits()
+			err := cfg.validateLimitsConfig()
+			
+			if tt.expectErr {
+				if err == nil {
+					t.Fatal("Expected error but got none")
+				}
+				return
+			}
+			
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
 
 			// Check that Limits config exists
 			if cfg.Limits == nil {
-				t.Fatal("Expected Limits config to be created")
+				t.Fatal("Expected Limits config to exist")
 			}
 
 			// Check defaults
@@ -102,17 +109,11 @@ func TestConfig_NormalizeLimits(t *testing.T) {
 				return
 			}
 
-			// Check each user (order doesn't matter for map migration)
-			userMap := make(map[string]*UserLimit)
-			for _, user := range cfg.Limits.Users {
-				userMap[user.User] = user
-			}
-
-			for _, expectedUser := range tt.expected.Users {
-				actualUser, exists := userMap[expectedUser.User]
-				if !exists {
-					t.Errorf("Expected user %s not found", expectedUser.User)
-					continue
+			// Check each user
+			for i, expectedUser := range tt.expected.Users {
+				actualUser := cfg.Limits.Users[i]
+				if actualUser.User != expectedUser.User {
+					t.Errorf("User %d: expected %s, got %s", i, expectedUser.User, actualUser.User)
 				}
 				if actualUser.BPSLocal != expectedUser.BPSLocal {
 					t.Errorf("User %s: expected BPSLocal=%d, got %d", expectedUser.User, expectedUser.BPSLocal, actualUser.BPSLocal)

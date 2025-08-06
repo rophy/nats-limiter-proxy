@@ -1,10 +1,15 @@
-bandwidth:
-  default_local: 102400   # 100KB/s per proxy instance
+limits:
+  defaults:
+    bps_local: 102400   # 100KB/s per proxy instance
+    bps_global: 102400  # 100KB/s for all proxies combined (ignored in local mode)
+  
   users:
-    alice:
-      local: 5242880      # 5MB/s per proxy instance
-    bob:
-      local: 2097152      # 2MB/s per proxy instance
+    - user: alice
+      bps_local: 5242880  # 5MB/s per proxy instance
+      bps_global: 5242880 # 5MB/s for all proxies combined
+    - user: bob
+      bps_local: 2097152  # 2MB/s per proxy instance  
+      bps_global: 2097152 # 2MB/s for all proxies combined
 
 # Local rate limiting only - no coordination
 redis:

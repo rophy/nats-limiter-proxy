@@ -29,26 +29,9 @@ type UserLimit struct {
 	BPSGlobal int64  `yaml:"bps_global"`
 }
 
-// Legacy bandwidth config for backward compatibility
-type BandwidthConfig struct {
-	DefaultLocal  int64                     `yaml:"default_local"`
-	DefaultGlobal int64                     `yaml:"default_global"`
-	Users         map[string]*UserBandwidth `yaml:"users"`
-}
-
-type UserBandwidth struct {
-	Local  int64 `yaml:"local"`
-	Global int64 `yaml:"global,omitempty"` // Optional, defaults to Local if not specified
-}
-
 type Config struct {
-	Limits    *LimitsConfig            `yaml:"limits"`    // New config format
-	Bandwidth *BandwidthConfig         `yaml:"bandwidth"` // Legacy config for backward compatibility
-	Redis     *RedisCoordinationConfig `yaml:"redis"`     // Redis config for global mode
-	
-	// Legacy fields for backward compatibility
-	DefaultBandwidth int64            `yaml:"default_bandwidth,omitempty"`
-	Users            map[string]int64 `yaml:"users,omitempty"`
+	Limits *LimitsConfig            `yaml:"limits"`
+	Redis  *RedisCoordinationConfig `yaml:"redis"`
 }
 
 // GetUserLimits returns the bandwidth limits for a given user
@@ -67,68 +50,6 @@ func (cfg *LimitsConfig) GetUserLimits(username string) *UserLimits {
 	return cfg.Defaults
 }
 
-// NormalizeLimits ensures the config has a valid Limits section by migrating from legacy formats
-func (cfg *Config) NormalizeLimits() {
-	// If new format already exists, use it
-	if cfg.Limits != nil {
-		return
-	}
-	
-	// Create new format from legacy config
-	cfg.Limits = &LimitsConfig{
-		Users: []*UserLimit{},
-	}
-	
-	// Set defaults from legacy config
-	if cfg.Bandwidth != nil {
-		cfg.Limits.Defaults = &UserLimits{
-			BPSLocal:  cfg.Bandwidth.DefaultLocal,
-			BPSGlobal: cfg.Bandwidth.DefaultGlobal,
-		}
-		
-		// Convert legacy users
-		for username, userBW := range cfg.Bandwidth.Users {
-			globalBW := userBW.Global
-			if globalBW == 0 {
-				globalBW = userBW.Local // Default global to local if not specified
-			}
-			
-			cfg.Limits.Users = append(cfg.Limits.Users, &UserLimit{
-				User:      username,
-				BPSLocal:  userBW.Local,
-				BPSGlobal: globalBW,
-			})
-		}
-	} else {
-		// Legacy format with default_bandwidth and users map
-		defaultBW := cfg.DefaultBandwidth
-		if defaultBW == 0 {
-			defaultBW = 102400 // 100KB/s default
-		}
-		
-		cfg.Limits.Defaults = &UserLimits{
-			BPSLocal:  defaultBW,
-			BPSGlobal: defaultBW,
-		}
-		
-		// Convert legacy users map
-		for username, bandwidth := range cfg.Users {
-			cfg.Limits.Users = append(cfg.Limits.Users, &UserLimit{
-				User:      username,
-				BPSLocal:  bandwidth,
-				BPSGlobal: bandwidth,
-			})
-		}
-	}
-	
-	// Ensure defaults exist
-	if cfg.Limits.Defaults == nil {
-		cfg.Limits.Defaults = &UserLimits{
-			BPSLocal:  102400, // 100KB/s
-			BPSGlobal: 102400, // 100KB/s
-		}
-	}
-}
 
 // MetricsCollector interface for collecting proxy metrics
 type MetricsCollector interface {
@@ -179,9 +100,9 @@ func LoadConfig(path string) (*Config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	// Handle backward compatibility and set defaults
-	if err := cfg.normalizeBandwidthConfig(); err != nil {
-		return nil, fmt.Errorf("invalid bandwidth configuration: %w", err)
+	// Validate and set defaults
+	if err := cfg.validateLimitsConfig(); err != nil {
+		return nil, fmt.Errorf("invalid limits configuration: %w", err)
 	}
 	
 	// Set default Redis coordination config if not specified
@@ -202,33 +123,40 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// normalizeBandwidthConfig handles backward compatibility and sets defaults
-func (cfg *Config) normalizeBandwidthConfig() error {
-	// Normalize config by migrating all formats to new Limits structure
-	cfg.NormalizeLimits()
+// validateLimitsConfig validates the limits configuration and sets defaults
+func (cfg *Config) validateLimitsConfig() error {
+	// Ensure limits config exists
+	if cfg.Limits == nil {
+		return fmt.Errorf("limits configuration is required")
+	}
 	
-	// Validate limits configuration and set reasonable defaults
-	if cfg.Limits != nil && cfg.Limits.Defaults != nil {
-		// Set reasonable defaults if not specified
-		if cfg.Limits.Defaults.BPSLocal == 0 {
-			cfg.Limits.Defaults.BPSLocal = 10 * 1024 * 1024 // 10MB/s
-		}
-		if cfg.Limits.Defaults.BPSGlobal == 0 {
-			cfg.Limits.Defaults.BPSGlobal = cfg.Limits.Defaults.BPSLocal // Default global = local
-		}
-		
-		// Ensure user limits are reasonable
-		for _, userLimit := range cfg.Limits.Users {
-			if userLimit.BPSLocal == 0 {
-				userLimit.BPSLocal = cfg.Limits.Defaults.BPSLocal
-			}
-			if userLimit.BPSGlobal == 0 {
-				userLimit.BPSGlobal = userLimit.BPSLocal // Default global = local
-			}
+	// Ensure defaults exist
+	if cfg.Limits.Defaults == nil {
+		cfg.Limits.Defaults = &UserLimits{
+			BPSLocal:  102400, // 100KB/s
+			BPSGlobal: 102400, // 100KB/s
 		}
 	}
 	
-	log.Info().Msg("Configuration normalized to limits format")
+	// Set reasonable defaults if not specified
+	if cfg.Limits.Defaults.BPSLocal == 0 {
+		cfg.Limits.Defaults.BPSLocal = 102400 // 100KB/s
+	}
+	if cfg.Limits.Defaults.BPSGlobal == 0 {
+		cfg.Limits.Defaults.BPSGlobal = cfg.Limits.Defaults.BPSLocal // Default global = local
+	}
+	
+	// Ensure user limits are reasonable
+	for _, userLimit := range cfg.Limits.Users {
+		if userLimit.BPSLocal == 0 {
+			userLimit.BPSLocal = cfg.Limits.Defaults.BPSLocal
+		}
+		if userLimit.BPSGlobal == 0 {
+			userLimit.BPSGlobal = userLimit.BPSLocal // Default global = local
+		}
+	}
+	
+	log.Info().Msg("Limits configuration validated")
 	return nil
 }
 
@@ -288,12 +216,12 @@ func NewProxy(upstreamHost string, upstreamPort int, configPath string, metrics 
 }
 
 func (p *Proxy) getBandwidthForUser(user string) int64 {
-	if user != "" && p.config.Bandwidth.Users != nil {
-		if userBW, ok := p.config.Bandwidth.Users[user]; ok {
-			return userBW.Local // Proxy uses local bandwidth for legacy compatibility
+	if user != "" && p.config.Limits != nil {
+		if userLimits := p.config.Limits.GetUserLimits(user); userLimits != nil && user != "" {
+			return userLimits.BPSLocal
 		}
 	}
-	return p.config.Bandwidth.DefaultLocal
+	return p.config.Limits.Defaults.BPSLocal
 }
 
 func (p *Proxy) HandleConnection(clientConn net.Conn) {
