@@ -126,10 +126,10 @@ func (grl *GlobalRateLimiter) GetGlobalBucket(username string) *ratelimit.Bucket
 
 	// Get user's configured global rate limit
 	var rateLimit int64
-	if userBW, exists := grl.config.Bandwidth.Users[username]; exists {
-		rateLimit = userBW.Global
+	if userLimits := grl.config.Limits.GetUserLimits(username); userLimits != nil {
+		rateLimit = userLimits.BPSGlobal
 	} else {
-		rateLimit = grl.config.Bandwidth.DefaultGlobal
+		rateLimit = grl.config.Limits.Defaults.BPSGlobal
 	}
 
 	// Create global bucket with same initial rate as local (will be rebalanced)
@@ -350,10 +350,10 @@ func (grl *GlobalRateLimiter) rebalanceGlobalQuotas() {
 func (grl *GlobalRateLimiter) rebalanceUserQuota(ctx context.Context, username string) {
 	// Get user's total configured global quota
 	var totalQuota int64
-	if userBW, exists := grl.config.Bandwidth.Users[username]; exists {
-		totalQuota = userBW.Global
+	if userLimits := grl.config.Limits.GetUserLimits(username); userLimits != nil {
+		totalQuota = userLimits.BPSGlobal
 	} else {
-		totalQuota = grl.config.Bandwidth.DefaultGlobal
+		totalQuota = grl.config.Limits.Defaults.BPSGlobal
 	}
 
 	// Get number of connected proxies for this user

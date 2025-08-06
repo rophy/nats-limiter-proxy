@@ -12,6 +12,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// New simplified config structure
+type LimitsConfig struct {
+	Defaults *UserLimits  `yaml:"defaults"`
+	Users    []*UserLimit `yaml:"users,omitempty"`
+}
+
+type UserLimits struct {
+	BPSLocal  int64 `yaml:"bps_local"`
+	BPSGlobal int64 `yaml:"bps_global"`
+}
+
+type UserLimit struct {
+	User      string `yaml:"user"`
+	BPSLocal  int64  `yaml:"bps_local"`
+	BPSGlobal int64  `yaml:"bps_global"`
+}
+
+// Legacy bandwidth config for backward compatibility
 type BandwidthConfig struct {
 	DefaultLocal  int64                     `yaml:"default_local"`
 	DefaultGlobal int64                     `yaml:"default_global"`
@@ -24,12 +42,92 @@ type UserBandwidth struct {
 }
 
 type Config struct {
-	Bandwidth *BandwidthConfig         `yaml:"bandwidth"`
-	Redis     *RedisCoordinationConfig `yaml:"redis"` // Redis config for global mode
+	Limits    *LimitsConfig            `yaml:"limits"`    // New config format
+	Bandwidth *BandwidthConfig         `yaml:"bandwidth"` // Legacy config for backward compatibility
+	Redis     *RedisCoordinationConfig `yaml:"redis"`     // Redis config for global mode
 	
 	// Legacy fields for backward compatibility
 	DefaultBandwidth int64            `yaml:"default_bandwidth,omitempty"`
 	Users            map[string]int64 `yaml:"users,omitempty"`
+}
+
+// GetUserLimits returns the bandwidth limits for a given user
+func (cfg *LimitsConfig) GetUserLimits(username string) *UserLimits {
+	// Check specific users first
+	for _, user := range cfg.Users {
+		if user.User == username {
+			return &UserLimits{
+				BPSLocal:  user.BPSLocal,
+				BPSGlobal: user.BPSGlobal,
+			}
+		}
+	}
+	
+	// Return defaults if user not found
+	return cfg.Defaults
+}
+
+// NormalizeLimits ensures the config has a valid Limits section by migrating from legacy formats
+func (cfg *Config) NormalizeLimits() {
+	// If new format already exists, use it
+	if cfg.Limits != nil {
+		return
+	}
+	
+	// Create new format from legacy config
+	cfg.Limits = &LimitsConfig{
+		Users: []*UserLimit{},
+	}
+	
+	// Set defaults from legacy config
+	if cfg.Bandwidth != nil {
+		cfg.Limits.Defaults = &UserLimits{
+			BPSLocal:  cfg.Bandwidth.DefaultLocal,
+			BPSGlobal: cfg.Bandwidth.DefaultGlobal,
+		}
+		
+		// Convert legacy users
+		for username, userBW := range cfg.Bandwidth.Users {
+			globalBW := userBW.Global
+			if globalBW == 0 {
+				globalBW = userBW.Local // Default global to local if not specified
+			}
+			
+			cfg.Limits.Users = append(cfg.Limits.Users, &UserLimit{
+				User:      username,
+				BPSLocal:  userBW.Local,
+				BPSGlobal: globalBW,
+			})
+		}
+	} else {
+		// Legacy format with default_bandwidth and users map
+		defaultBW := cfg.DefaultBandwidth
+		if defaultBW == 0 {
+			defaultBW = 102400 // 100KB/s default
+		}
+		
+		cfg.Limits.Defaults = &UserLimits{
+			BPSLocal:  defaultBW,
+			BPSGlobal: defaultBW,
+		}
+		
+		// Convert legacy users map
+		for username, bandwidth := range cfg.Users {
+			cfg.Limits.Users = append(cfg.Limits.Users, &UserLimit{
+				User:      username,
+				BPSLocal:  bandwidth,
+				BPSGlobal: bandwidth,
+			})
+		}
+	}
+	
+	// Ensure defaults exist
+	if cfg.Limits.Defaults == nil {
+		cfg.Limits.Defaults = &UserLimits{
+			BPSLocal:  102400, // 100KB/s
+			BPSGlobal: 102400, // 100KB/s
+		}
+	}
 }
 
 // MetricsCollector interface for collecting proxy metrics
@@ -106,46 +204,31 @@ func LoadConfig(path string) (*Config, error) {
 
 // normalizeBandwidthConfig handles backward compatibility and sets defaults
 func (cfg *Config) normalizeBandwidthConfig() error {
-	// If using new bandwidth structure, validate and set defaults
-	if cfg.Bandwidth != nil {
-		// Set default values if not specified
-		if cfg.Bandwidth.DefaultLocal == 0 {
-			cfg.Bandwidth.DefaultLocal = 10 * 1024 * 1024 // 10MB/s
+	// Normalize config by migrating all formats to new Limits structure
+	cfg.NormalizeLimits()
+	
+	// Validate limits configuration and set reasonable defaults
+	if cfg.Limits != nil && cfg.Limits.Defaults != nil {
+		// Set reasonable defaults if not specified
+		if cfg.Limits.Defaults.BPSLocal == 0 {
+			cfg.Limits.Defaults.BPSLocal = 10 * 1024 * 1024 // 10MB/s
 		}
-		if cfg.Bandwidth.DefaultGlobal == 0 {
-			cfg.Bandwidth.DefaultGlobal = cfg.Bandwidth.DefaultLocal // Default global = local
+		if cfg.Limits.Defaults.BPSGlobal == 0 {
+			cfg.Limits.Defaults.BPSGlobal = cfg.Limits.Defaults.BPSLocal // Default global = local
 		}
 		
-		// Ensure user global defaults to local if not specified
-		for _, userBW := range cfg.Bandwidth.Users {
-			if userBW.Global == 0 {
-				userBW.Global = userBW.Local
+		// Ensure user limits are reasonable
+		for _, userLimit := range cfg.Limits.Users {
+			if userLimit.BPSLocal == 0 {
+				userLimit.BPSLocal = cfg.Limits.Defaults.BPSLocal
+			}
+			if userLimit.BPSGlobal == 0 {
+				userLimit.BPSGlobal = userLimit.BPSLocal // Default global = local
 			}
 		}
-		return nil
 	}
 	
-	// Handle legacy configuration format
-	if cfg.DefaultBandwidth == 0 {
-		cfg.DefaultBandwidth = 10 * 1024 * 1024 // 10MB/s
-	}
-	
-	// Migrate legacy format to new structure
-	cfg.Bandwidth = &BandwidthConfig{
-		DefaultLocal:  cfg.DefaultBandwidth,
-		DefaultGlobal: cfg.DefaultBandwidth,
-		Users:         make(map[string]*UserBandwidth),
-	}
-	
-	// Migrate legacy user settings
-	for username, bandwidth := range cfg.Users {
-		cfg.Bandwidth.Users[username] = &UserBandwidth{
-			Local:  bandwidth,
-			Global: bandwidth, // Default global = local for legacy configs
-		}
-	}
-	
-	log.Info().Msg("Migrated legacy bandwidth configuration to new format")
+	log.Info().Msg("Configuration normalized to limits format")
 	return nil
 }
 

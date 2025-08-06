@@ -324,6 +324,84 @@ func TestClientMessageParser_RateLimitingIntegration(t *testing.T) {
 	t.Logf("Rate limiting integration test completed in %v", rateLimitWaitTime)
 }
 
+func TestClientMessageParser_ExtractUserFromConnect(t *testing.T) {
+	// Create a dummy parser just to test the user extraction method
+	input := strings.NewReader("")
+	output := &bytes.Buffer{}
+	parser := NewClientMessageParser(input, output, nil, &mockMetricsCollector{})
+
+	tests := []struct {
+		name     string
+		obj      map[string]interface{}
+		expected string
+	}{
+		{
+			name:     "Username/password authentication",
+			obj:      map[string]interface{}{"user": "alice", "pass": "secret"},
+			expected: "alice",
+		},
+		{
+			name:     "JWT authentication",
+			obj:      map[string]interface{}{"jwt": "eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJuYW1lIjoiYWxpY2UifQ."},
+			expected: "alice",
+		},
+		{
+			name:     "NKey authentication",
+			obj:      map[string]interface{}{"nkey": "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX"},
+			expected: "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX",
+		},
+		{
+			name:     "Token authentication",
+			obj:      map[string]interface{}{"auth_token": "s3cr3t"},
+			expected: "s3cr3t",
+		},
+		{
+			name:     "TLS certificate mapped user",
+			obj:      map[string]interface{}{"user": "alice@company.com"},
+			expected: "alice@company.com",
+		},
+		{
+			name:     "No authentication info",
+			obj:      map[string]interface{}{"verbose": true, "pedantic": false},
+			expected: "",
+		},
+		{
+			name:     "User takes precedence over JWT",
+			obj:      map[string]interface{}{"user": "bob", "jwt": "eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJuYW1lIjoiYWxpY2UifQ."},
+			expected: "bob", // User field has precedence
+		},
+		{
+			name:     "JWT takes precedence over nkey",
+			obj:      map[string]interface{}{"jwt": "eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJuYW1lIjoiYWxpY2UifQ.", "nkey": "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX"},
+			expected: "alice", // JWT has precedence over NKey
+		},
+		{
+			name:     "Empty user field falls back to nkey",
+			obj:      map[string]interface{}{"user": "", "nkey": "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX"},
+			expected: "", // Empty user field still takes precedence
+		},
+		{
+			name:     "NKey takes precedence over token",
+			obj:      map[string]interface{}{"nkey": "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX", "auth_token": "s3cr3t"},
+			expected: "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX",
+		},
+		{
+			name:     "Token as fallback",
+			obj:      map[string]interface{}{"auth_token": "s3cr3t", "verbose": true},
+			expected: "s3cr3t",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parser.extractUserFromConnect(tt.obj)
+			if result != tt.expected {
+				t.Errorf("extractUserFromConnect() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
 // Mock RateLimiterManager for testing
 type mockRateLimiterManager struct {
 	bucket *ratelimit.Bucket

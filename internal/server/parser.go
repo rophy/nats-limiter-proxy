@@ -377,14 +377,9 @@ func (c *ClientMessageParser) ParseAndForward() error {
 
 					var obj map[string]interface{}
 					if len(arg) > 0 && json.Unmarshal(arg, &obj) == nil {
-						if user, ok := obj["user"].(string); ok {
+						user := c.extractUserFromConnect(obj)
+						if user != "" {
 							c.processUser(user)
-						} else if jwtToken, ok := obj["jwt"].(string); ok {
-							// Check for JWT authentication
-							user := c.extractUsernameFromJWT(jwtToken)
-							if user != "" {
-								c.processUser(user)
-							}
 						}
 					}
 					c.drop, c.state = 0, OP_START
@@ -438,6 +433,31 @@ func (c *ClientMessageParser) processUser(user string) {
 		}
 	}
 
+}
+
+// extractUserFromConnect extracts user identifier from CONNECT message for all auth methods
+func (c *ClientMessageParser) extractUserFromConnect(obj map[string]interface{}) string {
+	// Username/password authentication or TLS certificate mapped user
+	if user, ok := obj["user"].(string); ok {
+		return user
+	}
+	
+	// JWT authentication - extract username from token claims
+	if jwtToken, ok := obj["jwt"].(string); ok {
+		return c.extractUsernameFromJWT(jwtToken)
+	}
+	
+	// NKey authentication - use NKey public key as user identifier
+	if nkey, ok := obj["nkey"].(string); ok {
+		return nkey
+	}
+	
+	// Token authentication - use token value as user identifier
+	if token, ok := obj["auth_token"].(string); ok {
+		return token
+	}
+	
+	return ""
 }
 
 func (c *ClientMessageParser) extractUsernameFromJWT(jwtToken string) string {

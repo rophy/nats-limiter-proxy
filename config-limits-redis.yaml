@@ -1,0 +1,41 @@
+# New limits-based configuration with Redis coordination
+limits:
+  defaults:
+    bps_local: 102400   # 100KB/s per proxy instance
+    bps_global: 204800  # 200KB/s total across all proxies
+  
+  users:
+    # Username/password and JWT authentication
+    - user: alice
+      bps_local: 5242880   # 5MB/s per proxy instance
+      bps_global: 15728640 # 15MB/s total across all proxies
+    - user: bob
+      bps_local: 2097152   # 2MB/s per proxy instance
+      bps_global: 4194304  # 4MB/s total across all proxies
+    
+    # TLS certificate mapped users
+    - user: "alice@company.com"
+      bps_local: 2097152   # 2MB/s per proxy instance
+      bps_global: 8388608  # 8MB/s total across all proxies
+    
+    # NKey authentication users
+    - user: "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX"
+      bps_local: 1048576   # 1MB/s per proxy instance
+      bps_global: 3145728  # 3MB/s total across all proxies
+    
+    # Token authentication users
+    - user: "s3cr3t"
+      bps_local: 512000    # 500KB/s per proxy instance
+      bps_global: 1024000  # 1MB/s total across all proxies
+
+# Redis coordination settings for global rate limiting
+redis:
+  enabled: true                           # Enable Redis coordination
+  redis_sentinels: ["redis-sentinel:26379"]  # Redis Sentinel addresses
+  redis_master_name: "mymaster"          # Redis master name in Sentinel
+  redis_password: ""                     # Redis password (if required)
+  redis_database: 0                      # Redis database number
+  sync_interval: 5s                      # How often to sync usage to Redis
+  rebalance_interval: 30s                # How often to rebalance tokens
+  cleanup_interval: 60s                  # How often to cleanup old data
+  startup_timeout: 30s                   # How long to wait for Redis on startup
