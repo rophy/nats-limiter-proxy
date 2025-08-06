@@ -57,7 +57,7 @@ services:
       - "4223-4225:4223"  # NATS proxy ports (range)
       - "8223-8225:8222"  # Metrics ports (range)
     volumes:
-      - ./config-redis.yaml:/app/config.yaml:ro
+      - ./config-limits-redis.yaml:/app/config.yaml:ro
     depends_on:
       - nats
       - redis-master
