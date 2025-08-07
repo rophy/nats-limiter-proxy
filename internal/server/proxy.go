@@ -246,6 +246,9 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 		p.metrics,
 	)
 
+	// Create server response parser for authentication detection
+	responseParser := NewServerResponseParser(parser)
+
 	// Client -> Upstream (with parsing and rate limiting)
 	go func() {
 		defer func() {
@@ -257,16 +260,18 @@ func (p *Proxy) HandleConnection(clientConn net.Conn) {
 		parser.ParseAndForward()
 	}()
 
-	// Upstream -> Client (with metrics but no rate limiting on responses)
-	p.copyWithMetrics(clientConn, upstreamConn, parser)
+	// Upstream -> Client (with metrics and authentication detection)
+	p.copyWithMetrics(clientConn, upstreamConn, parser, responseParser)
 }
 
-// copyWithMetrics copies data from src to dst while recording bytes_sent metrics
-func (p *Proxy) copyWithMetrics(dst, src net.Conn, parser *ClientMessageParser) {
+// copyWithMetrics copies data from src to dst while recording bytes_sent metrics and monitoring server responses
+func (p *Proxy) copyWithMetrics(dst, src net.Conn, parser *ClientMessageParser, responseParser *ServerResponseParser) {
 	buffer := make([]byte, 32*1024) // 32KB buffer
 	for {
 		n, err := src.Read(buffer)
 		if n > 0 {
+			// Parse server responses for authentication detection
+			responseParser.ParseResponse(buffer[:n])
 			// Record bytes sent TO client (proxy -> client)
 			user := parser.GetAuthenticatedUser()
 			p.metrics.RecordBytesSent(user, int64(n))

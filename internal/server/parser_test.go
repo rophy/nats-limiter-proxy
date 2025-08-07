@@ -412,9 +412,9 @@ func (m *mockRateLimiterManager) GetLimiter(username string) *ratelimit.Bucket {
 		return m.bucket
 	}
 
-	// For simplicity, just return a real bucket for basic functionality tests
-	// Rate limiting behavior will be tested separately
-	return ratelimit.NewBucketWithRate(1000, 1000)
+	// For testing, use very high rates to avoid blocking tests
+	// Rate limiting behavior will be tested separately with controlled buckets
+	return ratelimit.NewBucketWithRate(100*1024*1024, 100*1024*1024) // 100MB/s for tests
 }
 
 func (m *mockRateLimiterManager) GetGlobalLimiter(username string) *ratelimit.Bucket {

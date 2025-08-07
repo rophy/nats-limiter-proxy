@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/juju/ratelimit"
@@ -168,6 +169,16 @@ func (rlw *RateLimitedWriter) UpdateUser(username string) {
 	rlw.username = username
 }
 
+// AuthState represents the authentication state of a connection
+type AuthState int
+
+const (
+	AuthStateUnauthenticated AuthState = iota // Initial state - no authentication yet
+	AuthStateConnectSent                      // CONNECT message sent, waiting for response
+	AuthStateAuthenticated                    // Successfully authenticated
+	AuthStateFailed                           // Authentication failed
+)
+
 // ClientMessageParser parses and forwards NATS protocol data efficiently for proxying.
 type ClientMessageParser struct {
 	clientReader *bufio.Reader
@@ -179,7 +190,8 @@ type ClientMessageParser struct {
 	rateLimiterManager RateLimiterManagerInterface
 	metrics            MetricsCollector
 
-	user string
+	user      string
+	authState AuthState
 
 	// Fixed-size buffer for memory efficiency in high-throughput scenarios
 	buffer    [4096]byte // Fixed buffer - no growth
@@ -194,12 +206,25 @@ func NewClientMessageParser(
 	rateLimiterManager RateLimiterManagerInterface,
 	metrics MetricsCollector,
 ) *ClientMessageParser {
+	// Create rate limited writer with anonymous rate limiting initially
+	rateLimitedWriter := NewRateLimitedWriter(serverWriter, rateLimiterManager, metrics)
+	
+	// Set up anonymous rate limiting using default limits
+	if rateLimiterManager != nil {
+		anonymousLimiter := rateLimiterManager.GetLocalLimiter("<unauthenticated>")
+		if anonymousLimiter != nil {
+			rateLimitedWriter.UpdateLocalRateLimiter(anonymousLimiter)
+		}
+		rateLimitedWriter.UpdateUser("<unauthenticated>")
+	}
+	
 	return &ClientMessageParser{
 		clientReader:       bufio.NewReader(clientReader),
-		serverWriter:       NewRateLimitedWriter(serverWriter, rateLimiterManager, metrics),
+		serverWriter:       rateLimitedWriter,
 		state:              OP_START,
 		rateLimiterManager: rateLimiterManager,
 		metrics:            metrics,
+		authState:          AuthStateUnauthenticated,
 		bufferPos:          0, // Start with empty buffer
 	}
 }
@@ -379,7 +404,11 @@ func (c *ClientMessageParser) ParseAndForward() error {
 					if len(arg) > 0 && json.Unmarshal(arg, &obj) == nil {
 						user := c.extractUserFromConnect(obj)
 						if user != "" {
-							c.processUser(user)
+							// Store the user but don't set up rate limiting yet
+							// Wait for authentication confirmation from server
+							c.user = user
+							c.authState = AuthStateConnectSent
+							log.Info().Str("user", user).Msg("CONNECT message processed, waiting for authentication")
 						}
 					}
 					c.drop, c.state = 0, OP_START
@@ -509,5 +538,72 @@ func (c *ClientMessageParser) Disconnect() {
 		}
 	} else {
 		log.Info().Msg("Client disconnected")
+	}
+}
+
+// ServerResponseParser monitors server responses to detect authentication state
+type ServerResponseParser struct {
+	clientParser *ClientMessageParser
+	buffer       [1024]byte
+	bufferPos    int
+}
+
+// NewServerResponseParser creates a server response parser
+func NewServerResponseParser(clientParser *ClientMessageParser) *ServerResponseParser {
+	return &ServerResponseParser{
+		clientParser: clientParser,
+	}
+}
+
+// ParseResponse parses server responses and updates authentication state
+func (s *ServerResponseParser) ParseResponse(data []byte) {
+	// Only monitor responses if we're waiting for authentication
+	if s.clientParser.authState != AuthStateConnectSent {
+		return
+	}
+	
+	// Add data to buffer
+	for _, b := range data {
+		if s.bufferPos < len(s.buffer) {
+			s.buffer[s.bufferPos] = b
+			s.bufferPos++
+			
+			// Check for complete line (CRLF)
+			if s.bufferPos >= 2 && s.buffer[s.bufferPos-2] == '\r' && s.buffer[s.bufferPos-1] == '\n' {
+				line := string(s.buffer[:s.bufferPos-2])
+				s.processServerResponse(line)
+				s.bufferPos = 0 // Reset buffer
+			}
+		} else {
+			// Buffer full, reset
+			s.bufferPos = 0
+		}
+	}
+}
+
+// processServerResponse analyzes server response and updates authentication state
+func (s *ServerResponseParser) processServerResponse(line string) {
+	// Check for authentication error
+	if strings.HasPrefix(line, "-ERR 'Authorization Violation'") || 
+	   strings.HasPrefix(line, "-ERR 'Authentication") {
+		log.Info().
+			Str("user", s.clientParser.user).
+			Str("response", line).
+			Msg("Authentication failed")
+		
+		s.clientParser.authState = AuthStateFailed
+		return
+	}
+	
+	// Check for any non-error response (indicates success)
+	if !strings.HasPrefix(line, "-ERR ") && line != "" {
+		// Authentication successful - switch to user-specific rate limiting
+		log.Info().
+			Str("user", s.clientParser.user).
+			Str("response", line).
+			Msg("Authentication successful, switching to user-specific rate limiting")
+		
+		s.clientParser.authState = AuthStateAuthenticated
+		s.clientParser.processUser(s.clientParser.user)
 	}
 }
