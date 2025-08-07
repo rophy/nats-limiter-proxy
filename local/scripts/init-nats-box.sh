@@ -12,6 +12,7 @@ nsc push -A || echo "Push failed - may already be pushed"
 nats context add admin --server=nats://nats:4222 --creds=/nsc/nkeys/creds/root/app/admin.creds 2>/dev/null || echo "Context admin already exists"
 nats context add alice --server=nats://proxy:4223 --creds=/nsc/nkeys/creds/root/app/alice.creds 2>/dev/null || echo "Context alice already exists"
 nats context add bob --server=nats://proxy:4223 --creds=/nsc/nkeys/creds/root/app/bob.creds 2>/dev/null || echo "Context bob already exists"
+nats context add default --server=nats://proxy:4223 2>/dev/null || echo "Context default already exists"
 nats context select admin
 
 # Initialize JetStream streams and consumers
