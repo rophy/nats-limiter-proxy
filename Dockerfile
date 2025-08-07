@@ -8,19 +8,21 @@ RUN go mod download
 
 COPY . .
 
-# Build the Go app
+# Build the Go apps
 RUN go build -o nats-limiter-proxy ./cmd/nats-limiter-proxy
+RUN go build -o nats-observer ./cmd/nats-observer
 
 # Use a minimal image for running
 FROM alpine:3.22.0
 
 WORKDIR /app
 
-# Copy the binary from the builder
+# Copy the binaries from the builder
 COPY --from=builder /app/nats-limiter-proxy .
+COPY --from=builder /app/nats-observer .
 
-# Expose the proxy port
-EXPOSE 4223
+# Expose the proxy port and observer port
+EXPOSE 4223 14222
 
 # Run the proxy
 ENTRYPOINT ["./nats-limiter-proxy"]

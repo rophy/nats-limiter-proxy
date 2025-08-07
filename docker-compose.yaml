@@ -64,6 +64,19 @@ services:
       - redis-sentinel
     deploy:
       replicas: 1
+
+  # NATS Protocol Observer for debugging authentication flows
+  nats-observer:
+    image: nats-limiter-proxy
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["./nats-observer"]
+    command: ["-listen", "0.0.0.0:14222", "-upstream", "nats:4222", "-verbose"]
+    ports:
+      - "14222:14222"  # Observer port
+    depends_on:
+      - nats
 volumes:
   nats-jwt:
   nats-data:
