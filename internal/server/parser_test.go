@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -778,4 +779,297 @@ func TestClientMessageParser_RateLimitingAccuracy(t *testing.T) {
 			t.Errorf("Message %d missing from output", i)
 		}
 	}
+}
+
+func TestClientMessageParser_TwoPhaseRateLimiting_AnonymousToUserTransition(t *testing.T) {
+	var output bytes.Buffer
+
+	// Mock rate limiter manager that tracks what users get rate limiters
+	mockRLM := &trackingRateLimiterManager{
+		limiters: make(map[string]*ratelimit.Bucket),
+		users:    make([]string, 0),
+	}
+
+	// Create parser with two-phase rate limiting
+	input := strings.NewReader("CONNECT {\"user\":\"alice\",\"pass\":\"alicepass\"}\r\nPING\r\n")
+	parser := NewClientMessageParser(
+		input,
+		&output,
+		mockRLM,
+		&mockMetricsCollector{},
+	)
+
+	// Verify initial state
+	if parser.authState != AuthStateUnauthenticated {
+		t.Errorf("Expected initial auth state to be Unauthenticated, got %d", parser.authState)
+	}
+
+	// Verify anonymous rate limiter was created initially
+	if len(mockRLM.users) != 1 || mockRLM.users[0] != "<unauthenticated>" {
+		t.Errorf("Expected anonymous rate limiter to be created initially, got users: %v", mockRLM.users)
+	}
+
+	// Process CONNECT message (should transition to AuthStateConnectSent)
+	err := parser.ParseAndForward()
+	if err != nil {
+		t.Fatalf("ParseAndForward failed: %v", err)
+	}
+
+	// Verify CONNECT was processed and state changed
+	if parser.authState != AuthStateConnectSent {
+		t.Errorf("Expected auth state to be ConnectSent after CONNECT, got %d", parser.authState)
+	}
+
+	// Verify user was extracted but rate limiter not yet created
+	if parser.user != "alice" {
+		t.Errorf("Expected user to be 'alice', got '%s'", parser.user)
+	}
+
+	// At this point, only anonymous rate limiter should exist
+	if len(mockRLM.users) != 1 || mockRLM.users[0] != "<unauthenticated>" {
+		t.Errorf("Expected only anonymous rate limiter before auth success, got users: %v", mockRLM.users)
+	}
+
+	// Simulate server response parser for successful authentication
+	responseParser := NewServerResponseParser(parser)
+	responseParser.ParseResponse([]byte("PONG\r\n"))
+
+	// Verify state transitioned to authenticated
+	if parser.authState != AuthStateAuthenticated {
+		t.Errorf("Expected auth state to be Authenticated after PONG, got %d", parser.authState)
+	}
+
+	// Verify alice rate limiter was created after authentication success
+	if len(mockRLM.users) != 2 {
+		t.Errorf("Expected 2 rate limiters after auth success, got %d users: %v", len(mockRLM.users), mockRLM.users)
+	}
+
+	// Should have both anonymous and alice rate limiters
+	hasAnonymous := false
+	hasAlice := false
+	for _, user := range mockRLM.users {
+		if user == "<unauthenticated>" {
+			hasAnonymous = true
+		}
+		if user == "alice" {
+			hasAlice = true
+		}
+	}
+
+	if !hasAnonymous {
+		t.Error("Expected anonymous rate limiter to still exist")
+	}
+	if !hasAlice {
+		t.Error("Expected alice rate limiter to be created after authentication")
+	}
+}
+
+func TestClientMessageParser_TwoPhaseRateLimiting_AuthenticationFailure(t *testing.T) {
+	var output bytes.Buffer
+
+	// Mock rate limiter manager that tracks what users get rate limiters
+	mockRLM := &trackingRateLimiterManager{
+		limiters: make(map[string]*ratelimit.Bucket),
+		users:    make([]string, 0),
+	}
+
+	// Create parser
+	input := strings.NewReader("CONNECT {\"user\":\"baduser\",\"pass\":\"wrongpass\"}\r\nPING\r\n")
+	parser := NewClientMessageParser(
+		input,
+		&output,
+		mockRLM,
+		&mockMetricsCollector{},
+	)
+
+	// Process CONNECT message
+	err := parser.ParseAndForward()
+	if err != nil {
+		t.Fatalf("ParseAndForward failed: %v", err)
+	}
+
+	// Verify state is ConnectSent
+	if parser.authState != AuthStateConnectSent {
+		t.Errorf("Expected auth state to be ConnectSent, got %d", parser.authState)
+	}
+
+	// Simulate server response parser for failed authentication
+	responseParser := NewServerResponseParser(parser)
+	responseParser.ParseResponse([]byte("-ERR 'Authorization Violation'\r\n"))
+
+	// Verify state transitioned to failed
+	if parser.authState != AuthStateFailed {
+		t.Errorf("Expected auth state to be Failed after ERR, got %d", parser.authState)
+	}
+
+	// Verify only anonymous rate limiter exists (no invalid user rate limiter created)
+	if len(mockRLM.users) != 1 || mockRLM.users[0] != "<unauthenticated>" {
+		t.Errorf("Expected only anonymous rate limiter after auth failure, got users: %v", mockRLM.users)
+	}
+}
+
+func TestClientMessageParser_TwoPhaseRateLimiting_MultipleAuthMethods(t *testing.T) {
+	tests := []struct {
+		name          string
+		connectMsg    string
+		expectedUser  string
+	}{
+		{
+			name:          "JWT Authentication",
+			connectMsg:    `CONNECT {"jwt":"eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJUUklOIiwiaWF0IjoxNTQ0MjA3NjcxLCJpc3MiOiJBQklCQ0RFRkciLCJuYW1lIjoiYWxpY2UiLCJzdWIiOiJVQUlCQ0RFRkciLCJuYXRzIjp7InB1YiI6e30sInN1YiI6e319fQ.kCR9Erm9zzux4G6M-V2bp7wKMKgnSNqKFa6M_KzULh0X3JPKvbR9wHPjjNAjhgOD9eAhYVKG1vVNv4fZVRbRBg"}` + "\r\n",
+			expectedUser:  "alice",
+		},
+		{
+			name:          "Token Authentication", 
+			connectMsg:    `CONNECT {"auth_token":"s3cr3t"}` + "\r\n",
+			expectedUser:  "s3cr3t",
+		},
+		{
+			name:          "NKey Authentication",
+			connectMsg:    `CONNECT {"nkey":"UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX"}` + "\r\n", 
+			expectedUser:  "UC6NLCN7AS34YOJVCYD4PJ3QB7QGLYG5B5IMBT25VW5K4TNUJODM7BOX",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			
+			mockRLM := &trackingRateLimiterManager{
+				limiters: make(map[string]*ratelimit.Bucket),
+				users:    make([]string, 0),
+			}
+
+			input := strings.NewReader(tt.connectMsg + "PING\r\n")
+			parser := NewClientMessageParser(
+				input,
+				&output,
+				mockRLM,
+				&mockMetricsCollector{},
+			)
+
+			// Process CONNECT
+			err := parser.ParseAndForward()
+			if err != nil {
+				t.Fatalf("ParseAndForward failed: %v", err)
+			}
+
+			// Verify user extracted correctly
+			if parser.user != tt.expectedUser {
+				t.Errorf("Expected user '%s', got '%s'", tt.expectedUser, parser.user)
+			}
+
+			// Verify only anonymous rate limiter before auth
+			if len(mockRLM.users) != 1 || mockRLM.users[0] != "<unauthenticated>" {
+				t.Errorf("Expected only anonymous rate limiter, got: %v", mockRLM.users)
+			}
+
+			// Simulate successful authentication
+			responseParser := NewServerResponseParser(parser)
+			responseParser.ParseResponse([]byte("PONG\r\n"))
+
+			// Verify user-specific rate limiter created
+			hasUser := false
+			for _, user := range mockRLM.users {
+				if user == tt.expectedUser {
+					hasUser = true
+					break
+				}
+			}
+			if !hasUser {
+				t.Errorf("Expected rate limiter for user '%s', got users: %v", tt.expectedUser, mockRLM.users)
+			}
+		})
+	}
+}
+
+func TestServerResponseParser_AuthenticationDetection(t *testing.T) {
+	tests := []struct {
+		name                string
+		serverResponses     []string
+		expectedAuthState   AuthState
+	}{
+		{
+			name:              "PONG indicates success",
+			serverResponses:   []string{"PONG\r\n"},
+			expectedAuthState: AuthStateAuthenticated,
+		},
+		{
+			name:              "INFO indicates success",
+			serverResponses:   []string{"INFO {\"server_id\":\"test\"}\r\n"},
+			expectedAuthState: AuthStateAuthenticated,
+		},
+		{
+			name:              "Authorization error",
+			serverResponses:   []string{"-ERR 'Authorization Violation'\r\n"},
+			expectedAuthState: AuthStateFailed,
+		},
+		{
+			name:              "Authentication timeout",
+			serverResponses:   []string{"-ERR 'Authentication Timeout'\r\n"},
+			expectedAuthState: AuthStateFailed,
+		},
+		{
+			name:              "Multiple responses - success on first non-error",
+			serverResponses:   []string{"INFO {}\r\n", "PONG\r\n"},
+			expectedAuthState: AuthStateAuthenticated,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create parser in ConnectSent state
+			var output bytes.Buffer
+			mockRLM := &trackingRateLimiterManager{
+				limiters: make(map[string]*ratelimit.Bucket),
+				users:    make([]string, 0),
+			}
+
+			input := strings.NewReader("")
+			parser := NewClientMessageParser(input, &output, mockRLM, &mockMetricsCollector{})
+			parser.user = "testuser"
+			parser.authState = AuthStateConnectSent
+
+			responseParser := NewServerResponseParser(parser)
+
+			// Process server responses
+			for _, response := range tt.serverResponses {
+				responseParser.ParseResponse([]byte(response))
+				// Break after first response that changes state
+				if parser.authState != AuthStateConnectSent {
+					break
+				}
+			}
+
+			if parser.authState != tt.expectedAuthState {
+				t.Errorf("Expected auth state %d, got %d", tt.expectedAuthState, parser.authState)
+			}
+		})
+	}
+}
+
+// trackingRateLimiterManager tracks which users get rate limiters created
+type trackingRateLimiterManager struct {
+	limiters map[string]*ratelimit.Bucket
+	users    []string
+	mu       sync.Mutex
+}
+
+func (t *trackingRateLimiterManager) GetLocalLimiter(username string) *ratelimit.Bucket {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	
+	if _, exists := t.limiters[username]; !exists {
+		t.limiters[username] = ratelimit.NewBucketWithRate(100*1024*1024, 100*1024*1024)
+		t.users = append(t.users, username)
+	}
+	return t.limiters[username]
+}
+
+func (t *trackingRateLimiterManager) GetGlobalLimiter(username string) *ratelimit.Bucket {
+	return nil // Not needed for these tests
+}
+
+func (t *trackingRateLimiterManager) GetLimiter(username string) *ratelimit.Bucket {
+	return t.GetLocalLimiter(username)
 }

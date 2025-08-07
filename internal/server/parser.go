@@ -464,6 +464,21 @@ func (c *ClientMessageParser) processUser(user string) {
 
 }
 
+// switchToUserRateLimiter switches from anonymous to user-specific rate limiting after authentication success
+func (c *ClientMessageParser) switchToUserRateLimiter(user string) {
+	if c.rateLimiterManager != nil {
+		// Get user-specific rate limiter
+		localLimiter := c.rateLimiterManager.GetLocalLimiter(user)
+		c.serverWriter.UpdateLocalRateLimiter(localLimiter)
+		c.serverWriter.UpdateUser(user)
+		
+		// Notify that user has connected (for global tracking)
+		if combined, ok := c.rateLimiterManager.(*CombinedRateLimiter); ok {
+			combined.UserConnected(user)
+		}
+	}
+}
+
 // extractUserFromConnect extracts user identifier from CONNECT message for all auth methods
 func (c *ClientMessageParser) extractUserFromConnect(obj map[string]interface{}) string {
 	// Username/password authentication or TLS certificate mapped user
@@ -604,6 +619,6 @@ func (s *ServerResponseParser) processServerResponse(line string) {
 			Msg("Authentication successful, switching to user-specific rate limiting")
 		
 		s.clientParser.authState = AuthStateAuthenticated
-		s.clientParser.processUser(s.clientParser.user)
+		s.clientParser.switchToUserRateLimiter(s.clientParser.user)
 	}
 }
