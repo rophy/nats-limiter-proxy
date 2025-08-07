@@ -1,8 +1,8 @@
 # New limits-based configuration with Redis coordination
 limits:
   defaults:
-    bps_local: 102400   # 100KB/s per proxy instance
-    bps_global: 204800  # 200KB/s total across all proxies
+    bps_local: 52428800   # 50MB/s per proxy instance (for testing and reasonable defaults)
+    bps_global: 104857600 # 100MB/s total across all proxies
   
   users:
     # Username/password and JWT authentication

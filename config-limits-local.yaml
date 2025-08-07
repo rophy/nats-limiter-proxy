@@ -1,8 +1,8 @@
 # New limits-based configuration for local rate limiting
 limits:
   defaults:
-    bps_local: 102400   # 100KB/s per proxy instance
-    bps_global: 102400  # 100KB/s for all proxies combined (ignored in local mode)
+    bps_local: 52428800   # 50MB/s per proxy instance (for testing and reasonable defaults)
+    bps_global: 52428800  # 50MB/s for all proxies combined (ignored in local mode)
   
   users:
     # Username/password authentication

@@ -1,0 +1,469 @@
+docker compose up -d
+ Container nats-limiter-proxy-redis-master-1  Running
+ Container nats-limiter-proxy-nats-box-1  Running
+ Container nats-limiter-proxy-nats-1  Running
+ Container nats-limiter-proxy-redis-sentinel-1  Running
+ Container nats-limiter-proxy-nats-observer-1  Running
+ Container nats-limiter-proxy-proxy-1  Running
+mkdir -p bin
+CGO_ENABLED=0 GOOS=linux go test -c ./e2e -o bin/e2e.test
+Copying e2e test binary to nats-box...
+docker compose cp bin/e2e.test nats-box:/tmp/e2e.test
+ nats-limiter-proxy-nats-box-1 copy bin/e2e.test to nats-limiter-proxy-nats-box-1:/tmp/e2e.test Copying
+ nats-limiter-proxy-nats-box-1 copy bin/e2e.test to nats-limiter-proxy-nats-box-1:/tmp/e2e.test Copied
+Running e2e tests inside nats-box...
+docker compose exec nats-box /tmp/e2e.test -test.v
+=== RUN   TestE2E_BasicPubSub
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    e2e_basic_test.go:55: ✓ Message successfully passed through proxy: "Hello through proxy in docker-compose!"
+--- PASS: TestE2E_BasicPubSub (2.12s)
+=== RUN   TestE2E_ProxyVsDirectComparison
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_ProxyVsDirectComparison/DirectToNATS
+    e2e_basic_test.go:100: ✓ Direct NATS connection works: "Comparison test message"
+=== RUN   TestE2E_ProxyVsDirectComparison/ThroughProxy
+    e2e_basic_test.go:135: ✓ Proxy connection works: "Comparison test message"
+--- PASS: TestE2E_ProxyVsDirectComparison (2.24s)
+    --- PASS: TestE2E_ProxyVsDirectComparison/DirectToNATS (0.11s)
+    --- PASS: TestE2E_ProxyVsDirectComparison/ThroughProxy (0.12s)
+=== RUN   TestE2E_AuthenticatedConnections
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_AuthenticatedConnections/AliceCredentials
+    e2e_basic_test.go:181: ✓ Alice authentication works: "Authenticated message"
+=== RUN   TestE2E_AuthenticatedConnections/BobCredentials
+    e2e_basic_test.go:216: ✓ Bob authentication works: "Authenticated message"
+--- PASS: TestE2E_AuthenticatedConnections (2.24s)
+    --- PASS: TestE2E_AuthenticatedConnections/AliceCredentials (0.11s)
+    --- PASS: TestE2E_AuthenticatedConnections/BobCredentials (0.11s)
+=== RUN   TestE2E_LargeMessage
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    e2e_basic_test.go:258: Publishing large message (1048576 bytes)
+    e2e_basic_test.go:287: ✓ Complete message integrity verified - every byte matches
+    e2e_basic_test.go:290: ✓ Large message (1048576 bytes) successfully transmitted in 9.790484938s
+--- PASS: TestE2E_LargeMessage (11.92s)
+=== RUN   TestE2E_ConcurrentConnections
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    e2e_basic_test.go:332: Starting 10 concurrent publishers, 5 messages each
+    e2e_basic_test.go:397: ✓ Complete message integrity verified - all unique messages received
+    e2e_basic_test.go:400: ✓ Successfully received all 50 messages from 10 concurrent publishers
+--- PASS: TestE2E_ConcurrentConnections (2.28s)
+=== RUN   TestE2E_DataIntegrityPatterns
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_DataIntegrityPatterns/AllZeros
+    e2e_basic_test.go:475: Testing 10KB of zero bytes (10000 bytes)
+    e2e_basic_test.go:505: ✓ 10KB of zero bytes: Perfect data integrity - all 10000 bytes match (transmitted in 107.365435ms)
+=== RUN   TestE2E_DataIntegrityPatterns/AllOnes
+    e2e_basic_test.go:475: Testing 10KB of 0xFF bytes (10000 bytes)
+    e2e_basic_test.go:505: ✓ 10KB of 0xFF bytes: Perfect data integrity - all 10000 bytes match (transmitted in 106.412759ms)
+=== RUN   TestE2E_DataIntegrityPatterns/RandomPattern
+    e2e_basic_test.go:475: Testing 10KB pseudo-random pattern (10000 bytes)
+    e2e_basic_test.go:505: ✓ 10KB pseudo-random pattern: Perfect data integrity - all 10000 bytes match (transmitted in 197.926192ms)
+=== RUN   TestE2E_DataIntegrityPatterns/BinaryData
+    e2e_basic_test.go:475: Testing 10KB binary data (0-255 repeating) (10000 bytes)
+    e2e_basic_test.go:505: ✓ 10KB binary data (0-255 repeating): Perfect data integrity - all 10000 bytes match (transmitted in 197.601965ms)
+--- PASS: TestE2E_DataIntegrityPatterns (3.08s)
+    --- PASS: TestE2E_DataIntegrityPatterns/AllZeros (0.21s)
+    --- PASS: TestE2E_DataIntegrityPatterns/AllOnes (0.21s)
+    --- PASS: TestE2E_DataIntegrityPatterns/RandomPattern (0.30s)
+    --- PASS: TestE2E_DataIntegrityPatterns/BinaryData (0.30s)
+=== RUN   TestE2E_JetStreamBasicPubSub
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    e2e_jetstream_test.go:49: Publishing message to JetStream...
+    e2e_jetstream_test.go:55: ✓ Message published to JetStream: stream=TEST_EVENTS, seq=1
+    e2e_jetstream_test.go:94: ✓ JetStream message received and acknowledged: "JetStream test message through proxy"
+--- PASS: TestE2E_JetStreamBasicPubSub (2.10s)
+=== RUN   TestE2E_JetStreamLargeMessage
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    e2e_jetstream_test.go:134: Publishing large message (1048576 bytes) to JetStream...
+    e2e_jetstream_test.go:139: Failed to publish large message to JetStream: nats: timeout
+--- FAIL: TestE2E_JetStreamLargeMessage (12.95s)
+=== RUN   TestE2E_JetStreamDirectVsProxy
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_JetStreamDirectVsProxy/DirectJetStream
+    e2e_jetstream_test.go:268: ✓ Direct JetStream works: stream=TEST_DIRECT, seq=1
+=== RUN   TestE2E_JetStreamDirectVsProxy/ProxyJetStream
+    e2e_jetstream_test.go:326: ✓ Proxy JetStream works: stream=TEST_PROXY, seq=1
+--- PASS: TestE2E_JetStreamDirectVsProxy (2.11s)
+    --- PASS: TestE2E_JetStreamDirectVsProxy/DirectJetStream (0.01s)
+    --- PASS: TestE2E_JetStreamDirectVsProxy/ProxyJetStream (0.08s)
+=== RUN   TestE2E_AuthRequirement
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_AuthRequirement/NoCredentials
+    nats_server_auth_test.go:32: Warning: Error message doesn't clearly indicate auth requirement: nats: Authorization Violation
+    nats_server_auth_test.go:35: ✓ Proxy correctly rejects unauthenticated connections: nats: Authorization Violation
+=== RUN   TestE2E_AuthRequirement/InvalidCredentials
+    nats_server_auth_test.go:48: ✓ Proxy correctly rejects invalid credentials: nats: Authorization Violation
+=== RUN   TestE2E_AuthRequirement/ValidCredentials
+    nats_server_auth_test.go:82: ✓ Valid credentials work correctly: "auth test message"
+--- PASS: TestE2E_AuthRequirement (2.16s)
+    --- PASS: TestE2E_AuthRequirement/NoCredentials (0.01s)
+    --- PASS: TestE2E_AuthRequirement/InvalidCredentials (0.01s)
+    --- PASS: TestE2E_AuthRequirement/ValidCredentials (0.13s)
+=== RUN   TestE2E_MultiUserAuth
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_MultiUserAuth/Alice
+    nats_server_auth_test.go:146: ✓ Alice authentication and messaging works: "Message from Alice"
+=== RUN   TestE2E_MultiUserAuth/Bob
+    nats_server_auth_test.go:146: ✓ Bob authentication and messaging works: "Message from Bob"
+--- PASS: TestE2E_MultiUserAuth (2.30s)
+    --- PASS: TestE2E_MultiUserAuth/Alice (0.14s)
+    --- PASS: TestE2E_MultiUserAuth/Bob (0.13s)
+=== RUN   TestE2E_AuthenticationPersistence
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_auth_test.go:194: ✓ Initial authenticated connection works
+    nats_server_auth_test.go:234: ✓ Authentication persists across reconnections: "reconnect test"
+--- PASS: TestE2E_AuthenticationPersistence (3.30s)
+=== RUN   TestE2E_PerformanceComparison
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_PerformanceComparison/DirectNATSPerformance
+    nats_server_bench_test.go:191: ✓ Direct NATS performance:
+    nats_server_bench_test.go:192:   - Duration: 5.817363ms
+    nats_server_bench_test.go:193:   - Throughput: 167.87 MB/s
+    nats_server_bench_test.go:194:   - Rate: 171899 msg/s
+=== RUN   TestE2E_PerformanceComparison/ProxyPerformance
+    nats_server_bench_test.go:227: Failed to flush proxy publisher: nats: timeout
+--- FAIL: TestE2E_PerformanceComparison (17.81s)
+    --- PASS: TestE2E_PerformanceComparison/DirectNATSPerformance (0.12s)
+    --- FAIL: TestE2E_PerformanceComparison/ProxyPerformance (15.67s)
+=== RUN   TestE2E_ConcurrentLoadTesting
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_bench_test.go:334: All publishers completed in 1.262333456s
+    nats_server_bench_test.go:357: Subscriber 4 received 100/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 100/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 200/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 100/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 300/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 200/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 400/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 100/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 500/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 200/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 600/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 700/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 800/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 300/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 300/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 400/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 400/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 900/1000 messages
+    nats_server_bench_test.go:357: Subscriber 4 received 1000/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 500/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 600/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 200/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 100/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 200/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 500/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 300/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 300/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 400/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 400/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 700/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 500/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 800/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 600/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 500/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 700/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 600/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 600/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 800/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 700/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 800/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 900/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 700/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 900/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 800/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 900/1000 messages
+    nats_server_bench_test.go:357: Subscriber 1 received 1000/1000 messages
+    nats_server_bench_test.go:357: Subscriber 3 received 1000/1000 messages
+    nats_server_bench_test.go:357: Subscriber 0 received 1000/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 900/1000 messages
+    nats_server_bench_test.go:357: Subscriber 2 received 1000/1000 messages
+    nats_server_bench_test.go:406: ✓ Concurrent load test completed:
+    nats_server_bench_test.go:407:   - Publishers: 10
+    nats_server_bench_test.go:408:   - Subscribers: 5
+    nats_server_bench_test.go:409:   - Messages per publisher: 100
+    nats_server_bench_test.go:410:   - Total messages sent: 1000
+    nats_server_bench_test.go:411:   - Total messages received: 5000
+    nats_server_bench_test.go:412:   - Publish duration: 1.262333456s
+    nats_server_bench_test.go:413:   - Total duration: 1.266251587s
+    nats_server_bench_test.go:414:   - Throughput: 0.04 MB/s
+    nats_server_bench_test.go:415:   - Message rate: 3949 msg/s
+--- PASS: TestE2E_ConcurrentLoadTesting (3.63s)
+=== RUN   TestE2E_ProxyResilience
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_ProxyResilience/NATSServerReconnection
+    nats_server_cluster_test.go:52: ✓ Initial connectivity confirmed
+    nats_server_cluster_test.go:72: ✓ Connection resilient to potential NATS disruption
+=== RUN   TestE2E_ProxyResilience/ConnectionStability
+    nats_server_cluster_test.go:124: Received 10/50 stability messages
+    nats_server_cluster_test.go:124: Received 20/50 stability messages
+    nats_server_cluster_test.go:124: Received 30/50 stability messages
+    nats_server_cluster_test.go:124: Received 40/50 stability messages
+    nats_server_cluster_test.go:124: Received 50/50 stability messages
+    nats_server_cluster_test.go:134: ✓ Connection stability confirmed: 50 messages over 5s
+--- PASS: TestE2E_ProxyResilience (9.23s)
+    --- PASS: TestE2E_ProxyResilience/NATSServerReconnection (2.14s)
+    --- PASS: TestE2E_ProxyResilience/ConnectionStability (5.06s)
+=== RUN   TestE2E_LoadDistribution
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_LoadDistribution/MultiplePublishersToSingleSubscriber
+    nats_server_cluster_test.go:215: Received 20/100 messages from multiple publishers
+    nats_server_cluster_test.go:215: Received 40/100 messages from multiple publishers
+    nats_server_cluster_test.go:215: Received 60/100 messages from multiple publishers
+    nats_server_cluster_test.go:215: Received 80/100 messages from multiple publishers
+    nats_server_cluster_test.go:215: Received 100/100 messages from multiple publishers
+    nats_server_cluster_test.go:222: ✓ Load distribution successful: 5 publishers × 20 messages = 100 total
+=== RUN   TestE2E_LoadDistribution/SinglePublisherToMultipleSubscribers
+    nats_server_cluster_test.go:299: ✓ Subscriber 0 received all 30 messages
+    nats_server_cluster_test.go:299: ✓ Subscriber 1 received all 30 messages
+    nats_server_cluster_test.go:299: ✓ Subscriber 2 received all 30 messages
+    nats_server_cluster_test.go:299: ✓ Subscriber 3 received all 30 messages
+    nats_server_cluster_test.go:299: ✓ Subscriber 4 received all 30 messages
+    nats_server_cluster_test.go:302: ✓ Broadcast successful: 30 messages to 5 subscribers
+--- PASS: TestE2E_LoadDistribution (2.68s)
+    --- PASS: TestE2E_LoadDistribution/MultiplePublishersToSingleSubscriber (0.27s)
+    --- PASS: TestE2E_LoadDistribution/SinglePublisherToMultipleSubscribers (0.38s)
+=== RUN   TestE2E_ErrorHandling
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_ErrorHandling/InvalidSubjectHandling
+    nats_server_cluster_test.go:330: ✓ Empty subject correctly rejected: nats: invalid subject
+=== RUN   TestE2E_ErrorHandling/ConnectionLimits
+    nats_server_cluster_test.go:365: ✓ Multiple connections handled successfully: 20 connections
+=== RUN   TestE2E_ErrorHandling/GracefulDisconnection
+    nats_server_cluster_test.go:398: ✓ Message received before disconnect
+    nats_server_cluster_test.go:413: ✓ Graceful disconnection completed
+--- PASS: TestE2E_ErrorHandling (3.48s)
+    --- PASS: TestE2E_ErrorHandling/InvalidSubjectHandling (0.02s)
+    --- PASS: TestE2E_ErrorHandling/ConnectionLimits (0.31s)
+    --- PASS: TestE2E_ErrorHandling/GracefulDisconnection (1.13s)
+=== RUN   TestE2E_MaxPayloadEnforcement
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_MaxPayloadEnforcement/ProxyVsDirectMaxPayload
+=== RUN   TestE2E_MaxPayloadEnforcement/ProxyVsDirectMaxPayload/DirectNATS
+    nats_server_maxpayload_test.go:60: ✓ DirectNATS: Successfully published small payload (1024 bytes)
+    nats_server_maxpayload_test.go:91: ✓ DirectNATS: Successfully published 65536 bytes
+    nats_server_maxpayload_test.go:91: ✓ DirectNATS: Successfully published 131072 bytes
+    nats_server_maxpayload_test.go:91: ✓ DirectNATS: Successfully published 262144 bytes
+    nats_server_maxpayload_test.go:91: ✓ DirectNATS: Successfully published 524288 bytes
+    nats_server_maxpayload_test.go:91: ✓ DirectNATS: Successfully published 1048576 bytes
+    nats_server_maxpayload_test.go:85: ✓ DirectNATS: Max payload enforced at 2097152 bytes: nats: maximum payload exceeded
+=== RUN   TestE2E_MaxPayloadEnforcement/ProxyVsDirectMaxPayload/ThroughProxy
+    nats_server_maxpayload_test.go:60: ✓ ThroughProxy: Successfully published small payload (1024 bytes)
+    nats_server_maxpayload_test.go:91: ✓ ThroughProxy: Successfully published 65536 bytes
+    nats_server_maxpayload_test.go:91: ✓ ThroughProxy: Successfully published 131072 bytes
+    nats_server_maxpayload_test.go:91: ✓ ThroughProxy: Successfully published 262144 bytes
+    nats_server_maxpayload_test.go:91: ✓ ThroughProxy: Successfully published 524288 bytes
+    nats_server_maxpayload_test.go:91: ✓ ThroughProxy: Successfully published 1048576 bytes
+    nats_server_maxpayload_test.go:85: ✓ ThroughProxy: Max payload enforced at 2097152 bytes: nats: maximum payload exceeded
+--- PASS: TestE2E_MaxPayloadEnforcement (26.29s)
+    --- PASS: TestE2E_MaxPayloadEnforcement/ProxyVsDirectMaxPayload (24.27s)
+        --- PASS: TestE2E_MaxPayloadEnforcement/ProxyVsDirectMaxPayload/DirectNATS (0.03s)
+        --- PASS: TestE2E_MaxPayloadEnforcement/ProxyVsDirectMaxPayload/ThroughProxy (24.24s)
+=== RUN   TestE2E_MaxPayloadWithSubscription
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_MaxPayloadWithSubscription/DirectToDirectNATS
+    nats_server_maxpayload_test.go:169: Testing Direct NATS pub/sub with 262144 byte payload
+    nats_server_maxpayload_test.go:194: ✓ Direct NATS pub/sub: Large payload (262144 bytes) transmitted successfully
+=== RUN   TestE2E_MaxPayloadWithSubscription/ProxyToProxy
+    nats_server_maxpayload_test.go:169: Testing Proxy pub/sub with 262144 byte payload
+    nats_server_maxpayload_test.go:194: ✓ Proxy pub/sub: Large payload (262144 bytes) transmitted successfully
+=== RUN   TestE2E_MaxPayloadWithSubscription/ProxyToDirectNATS
+    nats_server_maxpayload_test.go:169: Testing Proxy publisher to direct subscriber with 262144 byte payload
+    nats_server_maxpayload_test.go:194: ✓ Proxy publisher to direct subscriber: Large payload (262144 bytes) transmitted successfully
+=== RUN   TestE2E_MaxPayloadWithSubscription/DirectToProxyNATS
+    nats_server_maxpayload_test.go:169: Testing Direct publisher to proxy subscriber with 262144 byte payload
+    nats_server_maxpayload_test.go:194: ✓ Direct publisher to proxy subscriber: Large payload (262144 bytes) transmitted successfully
+--- PASS: TestE2E_MaxPayloadWithSubscription (13.24s)
+    --- PASS: TestE2E_MaxPayloadWithSubscription/DirectToDirectNATS (0.11s)
+    --- PASS: TestE2E_MaxPayloadWithSubscription/ProxyToProxy (5.67s)
+    --- PASS: TestE2E_MaxPayloadWithSubscription/ProxyToDirectNATS (5.29s)
+    --- PASS: TestE2E_MaxPayloadWithSubscription/DirectToProxyNATS (0.13s)
+=== RUN   TestE2E_MaxPayloadErrorHandling
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_MaxPayloadErrorHandling/DirectNATS
+    nats_server_maxpayload_test.go:238: Testing DirectNATS with oversized payload (2098152 bytes)
+    nats_server_maxpayload_test.go:247: ✓ DirectNATS: Correctly rejected oversized payload: nats: maximum payload exceeded
+    nats_server_maxpayload_test.go:261: ✓ DirectNATS: Connection remains functional after max payload error
+=== RUN   TestE2E_MaxPayloadErrorHandling/ThroughProxy
+    nats_server_maxpayload_test.go:238: Testing ThroughProxy with oversized payload (2098152 bytes)
+    nats_server_maxpayload_test.go:247: ✓ ThroughProxy: Correctly rejected oversized payload: nats: maximum payload exceeded
+    nats_server_maxpayload_test.go:261: ✓ ThroughProxy: Connection remains functional after max payload error
+--- PASS: TestE2E_MaxPayloadErrorHandling (2.04s)
+    --- PASS: TestE2E_MaxPayloadErrorHandling/DirectNATS (0.01s)
+    --- PASS: TestE2E_MaxPayloadErrorHandling/ThroughProxy (0.02s)
+=== RUN   TestE2E_MaxPayloadConsistency
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_MaxPayloadConsistency/Size_1KB
+    nats_server_maxpayload_test.go:321: ✓ Both direct and proxy accepted 1024 bytes
+=== RUN   TestE2E_MaxPayloadConsistency/Size_10KB
+    nats_server_maxpayload_test.go:321: ✓ Both direct and proxy accepted 10240 bytes
+=== RUN   TestE2E_MaxPayloadConsistency/Size_100KB
+    nats_server_maxpayload_test.go:321: ✓ Both direct and proxy accepted 102400 bytes
+=== RUN   TestE2E_MaxPayloadConsistency/Size_500KB
+    nats_server_maxpayload_test.go:321: ✓ Both direct and proxy accepted 512000 bytes
+=== RUN   TestE2E_MaxPayloadConsistency/Size_1024KB
+    nats_server_maxpayload_test.go:321: ✓ Both direct and proxy accepted 1048576 bytes
+--- PASS: TestE2E_MaxPayloadConsistency (6.51s)
+    --- PASS: TestE2E_MaxPayloadConsistency/Size_1KB (0.01s)
+    --- PASS: TestE2E_MaxPayloadConsistency/Size_10KB (0.01s)
+    --- PASS: TestE2E_MaxPayloadConsistency/Size_100KB (0.01s)
+    --- PASS: TestE2E_MaxPayloadConsistency/Size_500KB (0.03s)
+    --- PASS: TestE2E_MaxPayloadConsistency/Size_1024KB (4.43s)
+=== RUN   TestE2E_ProtocolCompliance
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_ProtocolCompliance/PingPong
+    nats_server_proto_test.go:36: ✓ PING/PONG works through proxy: RTT=2.84289ms
+=== RUN   TestE2E_ProtocolCompliance/ServerInfo
+    nats_server_proto_test.go:52: ✓ Server info available through proxy: 1 servers
+=== RUN   TestE2E_ProtocolCompliance/FlushMechanism
+    nats_server_proto_test.go:86: ✓ Flush mechanism works through proxy
+--- PASS: TestE2E_ProtocolCompliance (2.07s)
+    --- PASS: TestE2E_ProtocolCompliance/PingPong (0.02s)
+    --- PASS: TestE2E_ProtocolCompliance/ServerInfo (0.02s)
+    --- PASS: TestE2E_ProtocolCompliance/FlushMechanism (0.02s)
+=== RUN   TestE2E_SubscriptionManagement
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_SubscriptionManagement/MultipleSubscriptions
+    nats_server_proto_test.go:159: ✓ Multiple subscriptions work correctly: 10 subscriptions
+=== RUN   TestE2E_SubscriptionManagement/QueueSubscriptions
+    nats_server_proto_test.go:214: Received on connection 1: queue-msg-0
+    nats_server_proto_test.go:214: Received on connection 1: queue-msg-1
+    nats_server_proto_test.go:214: Received on connection 1: queue-msg-2
+    nats_server_proto_test.go:217: Received on connection 2: queue-msg-3
+    nats_server_proto_test.go:214: Received on connection 1: queue-msg-4
+    nats_server_proto_test.go:214: Received on connection 1: queue-msg-5
+    nats_server_proto_test.go:217: Received on connection 2: queue-msg-6
+    nats_server_proto_test.go:217: Received on connection 2: queue-msg-7
+    nats_server_proto_test.go:214: Received on connection 1: queue-msg-8
+    nats_server_proto_test.go:214: Received on connection 1: queue-msg-9
+    nats_server_proto_test.go:231: ✓ Queue subscriptions work correctly: 10 messages distributed
+--- PASS: TestE2E_SubscriptionManagement (2.36s)
+    --- PASS: TestE2E_SubscriptionManagement/MultipleSubscriptions (0.16s)
+    --- PASS: TestE2E_SubscriptionManagement/QueueSubscriptions (0.18s)
+=== RUN   TestE2E_MessageSizes
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+=== RUN   TestE2E_MessageSizes/Empty
+    nats_server_proto_test.go:314: ✓ Empty (0 bytes) transmitted correctly in 3.096442ms
+=== RUN   TestE2E_MessageSizes/Small
+    nats_server_proto_test.go:314: ✓ Small (32 bytes) transmitted correctly in 2.046357ms
+=== RUN   TestE2E_MessageSizes/Medium
+    nats_server_proto_test.go:314: ✓ Medium (1024 bytes) transmitted correctly in 21.107132ms
+=== RUN   TestE2E_MessageSizes/Large
+    nats_server_proto_test.go:314: ✓ Large (32768 bytes) transmitted correctly in 640.12536ms
+=== RUN   TestE2E_MessageSizes/VeryLarge
+    nats_server_proto_test.go:314: ✓ VeryLarge (262144 bytes) transmitted correctly in 2.759666469s
+=== RUN   TestE2E_MessageSizes/MaxSize
+    nats_server_proto_test.go:314: ✓ MaxSize (1048576 bytes) transmitted correctly in 10.136423075s
+--- PASS: TestE2E_MessageSizes (16.22s)
+    --- PASS: TestE2E_MessageSizes/Empty (0.10s)
+    --- PASS: TestE2E_MessageSizes/Small (0.10s)
+    --- PASS: TestE2E_MessageSizes/Medium (0.12s)
+    --- PASS: TestE2E_MessageSizes/Large (0.74s)
+    --- PASS: TestE2E_MessageSizes/VeryLarge (2.86s)
+    --- PASS: TestE2E_MessageSizes/MaxSize (10.24s)
+=== RUN   TestE2E_HighVolumeMessaging
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_proto_test.go:363: Publishing 1000 messages of 1024 bytes each...
+    nats_server_proto_test.go:405: Received 100/1000 messages (latest: 99)
+    nats_server_proto_test.go:405: Received 200/1000 messages (latest: 199)
+    nats_server_proto_test.go:405: Received 300/1000 messages (latest: 299)
+    nats_server_proto_test.go:405: Received 400/1000 messages (latest: 399)
+    nats_server_proto_test.go:405: Received 500/1000 messages (latest: 499)
+    nats_server_proto_test.go:405: Received 600/1000 messages (latest: 599)
+    nats_server_proto_test.go:405: Received 700/1000 messages (latest: 699)
+    nats_server_proto_test.go:405: Received 800/1000 messages (latest: 799)
+    nats_server_proto_test.go:405: Received 900/1000 messages (latest: 899)
+    nats_server_proto_test.go:405: Received 1000/1000 messages (latest: 999)
+    nats_server_proto_test.go:425: ✓ High volume messaging successful:
+    nats_server_proto_test.go:426:   - Messages: 1000
+    nats_server_proto_test.go:427:   - Message size: 1024 bytes
+    nats_server_proto_test.go:428:   - Publish time: 9.275366154s
+    nats_server_proto_test.go:429:   - Total time: 9.27621384s
+    nats_server_proto_test.go:430:   - Throughput: 0.11 MB/s
+    nats_server_proto_test.go:431:   - Rate: 108 msg/s
+--- PASS: TestE2E_HighVolumeMessaging (11.40s)
+=== RUN   TestE2E_ServiceLatencyBasic
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_service_latency_test.go:64: ✓ Service request/response completed with latency: 12.30018ms
+--- PASS: TestE2E_ServiceLatencyBasic (2.13s)
+=== RUN   TestE2E_ServiceLatencyComparison
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_service_latency_test.go:94: ✓ Latency comparison - Direct: 6.362709ms, Proxy: 7.159884ms, Overhead: 797.175µs
+--- PASS: TestE2E_ServiceLatencyComparison (2.30s)
+=== RUN   TestE2E_ServiceErrorHandling
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_service_latency_test.go:158: ✓ Service error handling preserved through proxy
+--- PASS: TestE2E_ServiceErrorHandling (2.12s)
+=== RUN   TestE2E_ServiceLatencyConcurrent
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_service_latency_test.go:256: ✓ Concurrent service requests - Success: 10/10, Avg: 80.383549ms, Min: 16.707481ms, Max: 144.334175ms
+--- PASS: TestE2E_ServiceLatencyConcurrent (2.27s)
+=== RUN   TestE2E_ServiceLatencyWithHeaders
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_service_latency_test.go:339: ✓ Service headers preserved through proxy (latency: 1.97856ms)
+--- PASS: TestE2E_ServiceLatencyWithHeaders (2.12s)
+=== RUN   TestE2E_ServicesBasicPubSub
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_services_test.go:81: ✓ Basic service request/response patterns work through proxy
+--- PASS: TestE2E_ServicesBasicPubSub (2.12s)
+=== RUN   TestE2E_ServicesMultipleEndpoints
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_services_test.go:163: ✓ Multiple service endpoints work correctly through proxy
+--- PASS: TestE2E_ServicesMultipleEndpoints (2.23s)
+=== RUN   TestE2E_ServicesStreamingResponse
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_services_test.go:265: ✓ Streaming service responses work correctly through proxy (5 chunks)
+--- PASS: TestE2E_ServicesStreamingResponse (2.62s)
+=== RUN   TestE2E_ServicesErrorHandling
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_services_test.go:335: ✓ Service error handling preserved through proxy (success: 4, errors: 2)
+--- PASS: TestE2E_ServicesErrorHandling (2.13s)
+=== RUN   TestE2E_ServicesConcurrentClients
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_services_test.go:463: ✓ Concurrent service clients work correctly through proxy
+    nats_server_services_test.go:464:   - Clients: 5, Requests per client: 10, Total: 50
+    nats_server_services_test.go:466:   - Successful requests: 50, Unique responses: 50
+--- PASS: TestE2E_ServicesConcurrentClients (2.43s)
+=== RUN   TestE2E_ServicesLifecycleManagement
+    docker.go:164: NATS server is ready
+    docker.go:139: Proxy is ready
+    nats_server_services_test.go:544: ✓ Service lifecycle management works correctly through proxy
+--- PASS: TestE2E_ServicesLifecycleManagement (2.33s)
+FAIL
+
+make: *** [Makefile:76: test-e2e] Error 1
